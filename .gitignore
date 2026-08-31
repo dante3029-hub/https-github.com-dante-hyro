@@ -6,3 +6,5 @@ oi/
 bot_runtime/
 .env
 __pycache__/
+!price_data/*.csv
+!oi_data/*.csv
