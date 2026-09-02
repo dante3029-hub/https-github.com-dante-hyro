@@ -1,0 +1,1057 @@
+
+// â”€â”€â”€ Inputs â”€â”€â”€
+length     = input.int(5, "ZigZag Depth", minval=2)
+showWaves  = input.bool(true, "Show Wave Labels")
+showHist   = input.bool(false, "Show Historical Waves")
+showProj   = input.bool(true, "Show Projections")
+showFibLvl = input.bool(true, "Show Fib Levels")
+showTable  = input.bool(true, "Show Wave Table")
+trendDir   = input.string("Auto", "Trend Direction", options=["Auto","Bullish","Bearish"])
+manualWave = input.string("Auto", "Last Completed Wave", options=["Auto","1","2A","2B","2C","3","4A","4B","4C","5"])
+colorUp    = input.color(color.green, "Up Color")
+colorDown  = input.color(color.red, "Down Color")
+colorProj  = input.color(#2196F3, "Projection Color")
+colorAlt   = input.color(color.new(color.red, 50), "Alt. Color")
+showWMA    = input.bool(true, "Show WMAs")
+wmaColor50  = input.color(#FF9800, "50 WMA Color")
+wmaColor200 = input.color(#E91E63, "200 WMA Color")
+showAlt    = input.bool(false, "Show Alternate Scenario")
+showInvalid = input.bool(true, "Show Validation Line")
+tableSizeIn = input.string("Small", "Table Text Size", options=["Tiny", "Small", "Normal"])
+tblSz = tableSizeIn == "Normal" ? size.normal : tableSizeIn == "Small" ? size.small : size.tiny
+tblSzSm = tableSizeIn == "Normal" ? size.small : tableSizeIn == "Small" ? size.tiny : size.tiny
+
+// â”€â”€â”€ Projection Function â”€â”€â”€
+drawProjection(startP, startT, w1Len, originP, simI, isBull, col, style, currentPrice) =>
+    len1 = w1Len
+    len2 = len1 * 0.618
+    len3 = len1 * 1.618
+    len4 = len3 * 0.382
+    len5 = len1
+
+    dir0 = isBull ? 1.0 : -1.0
+    r_w1 = dir0 * len1
+    r_w2 = r_w1 - dir0 * len2
+    r_w3 = r_w2 + dir0 * len3
+    r_w4 = r_w3 - dir0 * len4
+    r_w5 = r_w4 + dir0 * len5
+    w5   = originP + r_w5
+    cycle0Net = w5 - originP
+
+    simP = startP
+    simT = startT
+    barSp = 22
+
+    // Flag to determine when to start drawing
+    bool isFirstForwardLine = true
+
+    for s = 1 to 12
+        effAbsIdx = simI + s
+        cycleNum  = int(math.floor(effAbsIdx / 9))
+        currIdx   = effAbsIdx % 9
+
+        cycleSign = (cycleNum % 2 == 0) ? 1.0 : -1.0
+        activeDir = (isBull ? 1.0 : -1.0) * cycleSign
+
+        float priorCyclesMove = 0.0
+        if cycleNum == 1
+            priorCyclesMove := cycle0Net
+        else if cycleNum >= 2
+            priorCyclesMove := (cycleNum % 2 == 1) ? cycle0Net : 0.0
+
+        cw1 = activeDir * len1
+        cw2 = cw1 - activeDir * len2
+        cw3 = cw2 + activeDir * len3
+        cw4 = cw3 - activeDir * len4
+        cw5 = cw4 + activeDir * len5
+
+        cw2a = cw1 - activeDir * len1 * 0.382
+        cw2b = cw2a + activeDir * (math.abs(cw1 - cw2a) * 0.5)
+        cw2c = cw2
+
+        cw4a = cw3 - activeDir * len3 * 0.236
+        cw4b = cw4a + activeDir * (math.abs(cw3 - cw4a) * 0.5)
+        cw4c = cw4
+
+        float relTp = 0.0
+        string lb = ""
+
+        if cycleNum % 2 == 1
+            // Corrective Cycle (A-B-C)
+            if currIdx == 0
+                relTp := cw1
+                lb := "A"
+            else if currIdx == 1
+                // Retracements of A aren't typical numbered, skip sub-labels
+                relTp := cw2a
+                lb := ""
+            else if currIdx == 2
+                relTp := cw2b
+                lb := ""
+            else if currIdx == 3
+                relTp := cw2c
+                lb := "B"
+            else if currIdx == 4
+                relTp := cw3
+                lb := "C"
+            else if currIdx == 5
+                relTp := cw4a
+                lb := ""
+            else if currIdx == 6
+                relTp := cw4b
+                lb := ""
+            else if currIdx == 7
+                relTp := cw4c
+                lb := "X"
+            else if currIdx == 8
+                relTp := cw5
+                lb := "Y"
+        else
+            // Motive Cycle (1-2-3-4-5)
+            if currIdx == 0
+                relTp := cw1
+                lb := "(1)"
+            else if currIdx == 1
+                relTp := cw2a
+                lb := "A"
+            else if currIdx == 2
+                relTp := cw2b
+                lb := "B"
+            else if currIdx == 3
+                relTp := cw2c
+                lb := "(2)"
+            else if currIdx == 4
+                relTp := cw3
+                lb := "(3)"
+            else if currIdx == 5
+                relTp := cw4a
+                lb := "A"
+            else if currIdx == 6
+                relTp := cw4b
+                lb := "B"
+            else if currIdx == 7
+                relTp := cw4c
+                lb := "(4)"
+            else if currIdx == 8
+                relTp := cw5
+                lb := "(5)"
+
+        tp = originP + priorCyclesMove + relTp
+        nt = simT + barSp
+
+        string finalLb = lb
+        if lb != ""
+            float pctChg = currentPrice != 0 ? ((tp - currentPrice) / currentPrice) * 100.0 : 0.0
+            string pctStr = (pctChg >= 0 ? "+" : "") + str.tostring(math.round(pctChg * 10) / 10, "#.#") + "%"
+            finalLb := lb + " (" + pctStr + ")"
+
+        // Check if we are drawing the very first forward-looking line from current price
+        if isFirstForwardLine
+            // Always tie the first predictive line from live currentPrice
+            line.new(startT, currentPrice, nt, tp, color=col, style=style, width=2)
+            if lb != ""
+                label.new(nt, tp, cycleNum > 0 ? finalLb : finalLb, color=col, style=label.style_label_left, textcolor=color.white, size=size.small)
+            isFirstForwardLine := false
+        else
+            if lb != ""
+                line.new(simT, simP, nt, tp, color=col, style=style, width=2)
+                label.new(nt, tp, cycleNum > 0 ? finalLb : finalLb, color=col, style=label.style_label_left, textcolor=color.white, size=size.small)
+            else
+                // Just draw the line to the invisible intermediate point, but don't label it to reduce chart clutter for corrections
+                line.new(simT, simP, nt, tp, color=col, style=style, width=2)
+
+        simP := tp
+        simT := nt
+
+// â”€â”€â”€ WMAs â”€â”€â”€
+wma50  = ta.wma(close, 50)
+wma200 = ta.wma(close, 200)
+plot(showWMA ? wma50  : na, "50 WMA",  color=wmaColor50,  linewidth=2)
+plot(showWMA ? wma200 : na, "200 WMA", color=wmaColor200, linewidth=2)
+
+// â”€â”€â”€ State â”€â”€â”€
+var float lastPP = na
+var int   lastPB = na
+var int   lastPTime = na
+var int   lastDir = 0
+var int   pivCnt = 0   // counts completed legs (= number of labels - 1)
+var line  curLine = na
+var label curLbl  = na
+var float[] px = array.new_float()
+var int[]   pt = array.new_int()
+var int[]   pTime = array.new_int()
+var label[] lbls = array.new_label()  // one label per pivot (including origin)
+
+// ─── 9-step wave cycle: 1, 2A, 2B, 2C, 3, 4A, 4B, 4C, 5 ───
+wLabel9(idx) =>
+    switch idx % 9
+        0 => "(1)"
+        1 => "A"
+        2 => "B"
+        3 => "(2)"
+        4 => "(3)"
+        5 => "A"
+        6 => "B"
+        7 => "(4)"
+        8 => "(5)"
+        => "?"
+
+wName9(idx) =>
+    switch idx % 9
+        0 => "Wave 1"
+        1 => "Wave 2A"
+        2 => "Wave 2B"
+        3 => "Wave 2C"
+        4 => "Wave 3"
+        5 => "Wave 4A"
+        6 => "Wave 4B"
+        7 => "Wave 4C"
+        8 => "Wave 5"
+        => "?"
+
+wFibLabel9(idx) =>
+    switch idx % 9
+        0 => "1.000"
+        1 => "0.382"
+        2 => "0.500"
+        3 => "0.618"
+        4 => "1.618"
+        5 => "0.236"
+        6 => "0.500"
+        7 => "0.382"
+        8 => "1.000"
+        => "â€”"
+
+wIdx9(w) =>
+    switch w
+        "1"  => 0
+        "2A" => 1
+        "2B" => 2
+        "2C" => 3
+        "3"  => 4
+        "4A" => 5
+        "4B" => 6
+        "4C" => 7
+        "5"  => 8
+        => 0
+
+// â”€â”€â”€ Structural Wave Detection â”€â”€â”€
+// Finds the 5 major EW turning points within RECENT pivots only.
+// Only searches the last 20 pivots to stay anchored to current price action.
+// Returns [originIdx, w1Idx, w2Idx, w3Idx, w4Idx]
+findStructuralWaves(isBull) =>
+    sz = array.size(px)
+    recentStart = math.max(0, sz - 20)  // Only search last 20 pivots
+    int oIdx = recentStart
+    int w1I = recentStart
+    int w2I = recentStart
+    int w3I = recentStart
+    int w4I = recentStart
+    if sz >= 3
+        if isBull
+            // Step 1: Find highest pivot in recent window = W3
+            w3I := recentStart
+            maxVal = array.get(px, recentStart)
+            for i = recentStart to sz - 1
+                v = array.get(px, i)
+                if v > maxVal
+                    maxVal := v
+                    w3I := i
+            // Step 2: Lowest between recentStart and W3 = origin
+            oIdx := recentStart
+            minVal = array.get(px, recentStart)
+            for i = recentStart to w3I
+                v = array.get(px, i)
+                if v < minVal
+                    minVal := v
+                    oIdx := i
+            // Step 3: First local max between origin and W3 = W1
+            w1I := math.min(oIdx + 1, w3I)
+            if w3I > oIdx + 2
+                localMax = array.get(px, oIdx + 1)
+                for i = oIdx + 1 to w3I - 1
+                    v = array.get(px, i)
+                    if v > localMax
+                        localMax := v
+                        w1I := i
+                    if v < localMax * 0.9
+                        break
+            // Step 4: Lowest between W1 and W3 = W2
+            w2I := w1I
+            if w3I > w1I + 1
+                localMin = array.get(px, w1I)
+                for i = w1I to w3I - 1
+                    v = array.get(px, i)
+                    if v < localMin
+                        localMin := v
+                        w2I := i
+            // Step 5: Lowest after W3 = W4
+            w4I := w3I
+            if w3I < sz - 1
+                localMin2 = array.get(px, w3I + 1)
+                w4I := w3I + 1
+                for i = w3I + 1 to sz - 1
+                    v = array.get(px, i)
+                    if v < localMin2
+                        localMin2 := v
+                        w4I := i
+        else
+            // Bear: highest in recent window = origin, then lowest after = W3
+            oIdx := recentStart
+            maxVal2 = array.get(px, recentStart)
+            for i = recentStart to sz - 1
+                v = array.get(px, i)
+                if v > maxVal2
+                    maxVal2 := v
+                    oIdx := i
+            // Lowest between origin and end of recent window = W3
+            w3I := oIdx
+            minVal2 = array.get(px, oIdx)
+            for i = oIdx to sz - 1
+                v = array.get(px, i)
+                if v < minVal2
+                    minVal2 := v
+                    w3I := i
+            // W1 = first significant trough between origin and W3
+            w1I := math.min(oIdx + 1, w3I)
+            if w3I > oIdx + 2
+                localMin3 = array.get(px, oIdx + 1)
+                for i = oIdx + 1 to w3I - 1
+                    v = array.get(px, i)
+                    if v < localMin3
+                        localMin3 := v
+                        w1I := i
+                    if v > localMin3 * 1.1
+                        break
+            // W2 = highest bounce between W1 and W3
+            w2I := w1I
+            if w3I > w1I + 1
+                localMax3 = array.get(px, w1I)
+                for i = w1I to w3I - 1
+                    v = array.get(px, i)
+                    if v > localMax3
+                        localMax3 := v
+                        w2I := i
+            // W4 = highest bounce after W3
+            w4I := w3I
+            if w3I < sz - 1
+                localMax4 = array.get(px, w3I + 1)
+                w4I := w3I + 1
+                for i = w3I + 1 to sz - 1
+                    v = array.get(px, i)
+                    if v > localMax4
+                        localMax4 := v
+                        w4I := i
+    [oIdx, w1I, w2I, w3I, w4I]
+
+// â”€â”€â”€ Fibonacci Ratio Validation â”€â”€â”€
+// Returns a confidence score 0-100 for how well the pivot sequence matches EW rules
+ewConfidence(sz) =>
+    float score = 0.0
+    if sz >= 5
+        // Get last 5 legs
+        float l1 = math.abs(array.get(px, sz-5) - array.get(px, sz-4)) // Wave 1
+        float l2 = math.abs(array.get(px, sz-4) - array.get(px, sz-3)) // Wave 2
+        float l3 = math.abs(array.get(px, sz-3) - array.get(px, sz-2)) // Wave 3
+        float l4 = math.abs(array.get(px, sz-2) - array.get(px, sz-1)) // Wave 4
+        // Rule 1: Wave 3 is never the shortest (max +30 pts)
+        if l3 >= l1 and l3 >= l4
+            score += 30.0
+        // Rule 2: Wave 2 retraces 38.2%-78.6% of Wave 1 (max +25 pts)
+        if l1 > 0
+            r2 = l2 / l1
+            if r2 >= 0.382 and r2 <= 0.786
+                score += 25.0
+            else if r2 >= 0.236 and r2 <= 0.886
+                score += 12.0
+        // Rule 3: Wave 3 extends 1.272x-2.618x Wave 1 (max +25 pts)
+        if l1 > 0
+            ext3 = l3 / l1
+            if ext3 >= 1.272 and ext3 <= 2.618
+                score += 25.0
+            else if ext3 >= 1.0 and ext3 <= 3.0
+                score += 12.0
+        // Rule 4: Wave 4 retraces 23.6%-50% of Wave 3 (max +20 pts)
+        if l3 > 0
+            r4 = l4 / l3
+            if r4 >= 0.236 and r4 <= 0.500
+                score += 20.0
+            else if r4 >= 0.146 and r4 <= 0.618
+                score += 10.0
+    score
+
+// â”€â”€â”€ Pivot Detection â”€â”€â”€
+ph = ta.pivothigh(high, length, length)
+pl = ta.pivotlow(low, length, length)
+
+if not na(ph)
+    if lastDir != 1
+        // New high pivot after a low (or very first high)
+        if na(lastPP)
+            // Very first pivot ever — create origin label (no line yet)
+            curLbl := label.new(bar_index[length], ph, "·", style=label.style_label_down, color=showHist ? color.new(color.gray, 60) : na, textcolor=showHist ? color.white : na, size=size.tiny)
+            array.push(lbls, curLbl)
+        else
+            // Completed a down-leg then up to this high
+            curLine := line.new(lastPB, lastPP, bar_index[length], ph, color=showHist ? colorUp : na, width=2)
+            // High pivot: wave completed going UP — label above pointing down
+            curLbl  := label.new(bar_index[length], ph, "·", style=label.style_label_down, color=showHist ? color.new(color.blue, 0) : na, textcolor=showHist ? color.white : na, size=size.small)
+            array.push(lbls, curLbl)
+            pivCnt += 1
+        lastPP  := ph
+        lastPB  := bar_index[length]
+        lastPTime := time[length]
+        lastDir := 1
+        array.push(px, ph)
+        array.push(pt, bar_index[length])
+        array.push(pTime, time[length])
+    else
+        if ph >= lastPP
+            lastPP := ph
+            lastPB := bar_index[length]
+            if not na(curLine)
+                line.set_xy2(curLine, bar_index[length], ph)
+            if not na(curLbl)
+                label.set_xy(curLbl, bar_index[length], ph)
+            if array.size(px) > 0
+                array.set(px, array.size(px) - 1, ph)
+                array.set(pt, array.size(pt) - 1, bar_index[length])
+                array.set(pTime, array.size(pTime) - 1, time[length])
+
+if not na(pl)
+    if lastDir != -1
+        // New low pivot after a high (or very first low)
+        if na(lastPP)
+            // Very first pivot ever — create origin label
+            curLbl := label.new(bar_index[length], pl, "·", style=label.style_label_up, color=showHist ? color.new(color.gray, 60) : na, textcolor=showHist ? color.white : na, size=size.tiny)
+            array.push(lbls, curLbl)
+        else
+            // Completed an up-leg then down to this low
+            curLine := line.new(lastPB, lastPP, bar_index[length], pl, color=showHist ? colorDown : na, width=2)
+            // Low pivot: wave completed going DOWN — label below pointing up
+            curLbl  := label.new(bar_index[length], pl, "·", style=label.style_label_up, color=showHist ? color.new(color.orange, 0) : na, textcolor=showHist ? color.white : na, size=size.small)
+            array.push(lbls, curLbl)
+            pivCnt += 1
+        lastPP  := pl
+        lastPB  := bar_index[length]
+        lastPTime := time[length]
+        lastDir := -1
+        array.push(px, pl)
+        array.push(pt, bar_index[length])
+        array.push(pTime, time[length])
+    else
+        if pl <= lastPP
+            lastPP := pl
+            lastPB := bar_index[length]
+            if not na(curLine)
+                line.set_xy2(curLine, bar_index[length], pl)
+            if not na(curLbl)
+                label.set_xy(curLbl, bar_index[length], pl)
+            if array.size(px) > 0
+                array.set(px, array.size(px) - 1, pl)
+                array.set(pt, array.size(pt) - 1, bar_index[length])
+                array.set(pTime, array.size(pTime) - 1, time[length])
+
+// â”€â”€â”€ Last Bar: Relabel + Project â”€â”€â”€
+if barstate.islast
+    // Determine trend direction
+    isBull = true
+    if trendDir == "Bearish"
+        isBull := false
+    else if trendDir == "Auto"
+        sz = array.size(px)
+        if sz > 1
+            startIdx = math.max(0, sz - 7)
+            isBull := array.get(px, sz - 1) > array.get(px, startIdx)
+
+    sz = array.size(px)
+
+    // â”€â”€â”€ Find 5 structural turning points â”€â”€â”€
+    [sOrigin, sW1, sW2, sW3, sW4] = findStructuralWaves(isBull)
+
+    // Manual override is handled in simI determination below
+
+    // â”€â”€â”€ Relabel: mark only the 5 structural points + origin â”€â”€â”€
+    if showWaves
+        for i = 0 to array.size(lbls) - 1
+            lbl = array.get(lbls, i)
+            if i == sOrigin
+                label.set_text(lbl, "(0)")
+                label.set_size(lbl, size.small)
+                label.set_color(lbl, color.new(color.gray, 60))
+                label.set_textcolor(lbl, color.white)
+            else if i == sW1
+                label.set_text(lbl, "(1)")
+                label.set_size(lbl, size.small)
+                label.set_color(lbl, color.new(isBull ? color.blue : color.orange, 0))
+                label.set_textcolor(lbl, color.white)
+            else if i == sW2
+                label.set_text(lbl, "(2)")
+                label.set_size(lbl, size.small)
+                label.set_color(lbl, color.new(isBull ? color.orange : color.blue, 0))
+                label.set_textcolor(lbl, color.white)
+            else if i == sW3
+                label.set_text(lbl, "(3)")
+                label.set_size(lbl, size.small)
+                label.set_color(lbl, color.new(isBull ? color.blue : color.orange, 0))
+                label.set_textcolor(lbl, color.white)
+            else if i == sW4
+                label.set_text(lbl, "(4)")
+                label.set_size(lbl, size.small)
+                label.set_color(lbl, color.new(isBull ? color.orange : color.blue, 0))
+                label.set_textcolor(lbl, color.white)
+            else
+                label.set_text(lbl, showHist ? "·" : "")
+                label.set_size(lbl, size.tiny)
+                label.set_color(lbl, showHist ? color.new(color.gray, 60) : na)
+                label.set_textcolor(lbl, showHist ? color.white : na)
+
+    // â”€â”€â”€ Determine simI from structural position â”€â”€â”€
+    // simI maps to the 9-step projection model
+    int simI = 0
+    lastPivIdx = sz - 1
+    if manualWave != "Auto"
+        simI := wIdx9(manualWave)
+    else if lastPivIdx <= sW1
+        simI := 0      // In Wave 1 phase
+    else if lastPivIdx <= sW2
+        simI := 3      // Wave 2 completed (â‰ˆ 2C)
+    else if lastPivIdx <= sW3
+        simI := 4      // In Wave 3 phase
+    else if lastPivIdx <= sW4
+        simI := 7      // Wave 4 completed (â‰ˆ 4C)
+    else
+        simI := 8      // In Wave 5 phase
+
+    // â”€â”€â”€ Projections: Impulse Wave Structure â”€â”€â”€
+    if showProj and sz >= 3
+        curP = array.get(px, sz - 1)
+        curT = array.get(pt, sz - 1)
+
+        // Origin and Wave 1 from structural detection
+        float originP = array.get(px, sOrigin)
+        float w1End_px = sW1 < sz ? array.get(px, sW1) : originP
+        float w1Len = math.abs(w1End_px - originP)
+
+        // Actual Wave 3 length from structural points
+        float w2Price = sW2 < sz ? array.get(px, sW2) : w1End_px
+        float w3Price = sW3 < sz ? array.get(px, sW3) : w2Price
+        float w3LenActual = math.abs(w3Price - w2Price)
+
+        // â”€â”€â”€ Projection Constants â”€â”€â”€
+        // Base on W1, but scale up if W3 is extended
+        len1 = w1Len
+
+        if w3LenActual > 0 and w1Len > 0
+            if w3LenActual > (w1Len * 2.618)
+                // W3 extended: anchor model to W3
+                len1 := w3LenActual / 1.618
+
+        // Safety: if len1 is zero or tiny, use average recent leg
+        L0 = math.abs(array.get(px, sz-1) - array.get(px, sz-2))
+        L1 = sz >= 3 ? math.abs(array.get(px, sz-2) - array.get(px, sz-3)) : L0
+        if len1 < 0.001
+            len1 := L0
+
+        len2 = len1 * 0.618
+        len3 = len1 * 1.618
+        len4 = len3 * 0.382
+        len5 = len1
+
+        dir0 = isBull ? 1.0 : -1.0
+        
+        r_w1 = dir0 * len1
+        r_w2 = r_w1 - dir0 * len2
+        r_w3 = r_w2 + dir0 * len3
+        r_w4 = r_w3 - dir0 * len4
+        r_w5 = r_w4 + dir0 * len5
+
+        w1End = originP + r_w1
+        w2a   = w1End - dir0 * len1 * 0.382
+        w2b   = w2a   + dir0 * (math.abs(w1End - w2a) * 0.5)
+        w2c   = originP + r_w2
+        w3    = originP + r_w3
+        w4a   = w3    - dir0 * len3 * 0.236
+        w4b   = w4a   + dir0 * (math.abs(w3 - w4a) * 0.5)
+        w4c   = originP + r_w4
+        w5    = originP + r_w5
+
+        // Floor: prices can't go below zero
+        w1End := math.max(0.01, w1End)
+        w2a   := math.max(0.01, w2a)
+        w2b   := math.max(0.01, w2b)
+        w2c   := math.max(0.01, w2c)
+        w3    := math.max(0.01, w3)
+        w4a   := math.max(0.01, w4a)
+        w4b   := math.max(0.01, w4b)
+        w4c   := math.max(0.01, w4c)
+        w5    := math.max(0.01, w5)
+
+        // â”€â”€â”€ Smart Overshoot Detection â”€â”€â”€
+        nextI = (simI + 1) % 9
+        if nextI == 5
+            if (isBull and close < w4a) or (not isBull and close > w4a)
+                simI := 5
+
+        // â”€â”€â”€ Draw Projections â”€â”€â”€
+        if originP <= 0
+            originP := curP * 0.9
+
+        drawProjection(close, bar_index, w1Len, originP, simI, isBull, colorProj, line.style_dashed, close)
+
+        int altSimI = na
+        float altOriginP = na
+        if showAlt
+            bool isLastHigh = array.get(px, sz-1) > array.get(px, sz-2)
+            altSimI := simI
+            altOriginP := curP
+
+            if not isBull
+                if isLastHigh
+                    altSimI := -1
+                    altOriginP := curP
+                else
+                    altSimI := 0
+                    altOriginP := curP + w1Len
+            else
+                if isLastHigh
+                    altSimI := 0
+                    altOriginP := curP - w1Len
+                else
+                    altSimI := -1
+                    altOriginP := curP
+
+            if altOriginP > 0
+                drawProjection(close, bar_index, w1Len, altOriginP, altSimI, not isBull, colorAlt, line.style_dotted, close)
+
+        // â”€â”€â”€ Validation Line â”€â”€â”€
+        if showInvalid and originP > 0
+            validLevel = originP
+            valLineEnd = bar_index + 30
+            line.new(bar_index - 10, validLevel, valLineEnd, validLevel, color=color.new(color.gray, 30), style=line.style_solid, width=1)
+            label.new(valLineEnd, validLevel, "Invalidation\nLevel", color=color.new(color.gray, 100), style=label.style_label_left, textcolor=color.gray, size=size.tiny)
+
+        // â”€â”€â”€ Enhanced Fibonacci Level Lines â”€â”€â”€
+        if showFibLvl
+            fibStart = array.get(pt, math.max(0, sOrigin))
+            projEndT = bar_index + (12 * 22)
+            fibEnd   = projEndT + 20
+
+            // Wave 2 retracement levels
+            line.new(fibStart, w2a, fibEnd, w2a, color=color.new(colorUp, 40), style=line.style_dotted, width=1)
+            label.new(fibEnd, w2a, "2A  0.382", color=color.new(color.gray, 100), style=label.style_label_left, textcolor=colorUp, size=size.tiny)
+
+            line.new(fibStart, w2b, fibEnd, w2b, color=color.new(colorUp, 60), style=line.style_dotted, width=1)
+            label.new(fibEnd, w2b, "2B  0.500", color=color.new(color.gray, 100), style=label.style_label_left, textcolor=colorUp, size=size.tiny)
+
+            line.new(fibStart, w2c, fibEnd, w2c, color=color.new(colorUp, 30), style=line.style_dashed, width=1)
+            label.new(fibEnd, w2c, "2C  0.618", color=color.new(color.gray, 100), style=label.style_label_left, textcolor=colorUp, size=size.tiny)
+
+            // Wave 3 extension levels
+            line.new(fibStart, w3, fibEnd, w3, color=color.new(colorProj, 30), style=line.style_dashed, width=2)
+            label.new(fibEnd, w3, "(3)  1.618", color=color.new(color.gray, 100), style=label.style_label_left, textcolor=colorProj, size=size.tiny)
+
+            // Wave 4 retracement levels
+            line.new(fibStart, w4a, fibEnd, w4a, color=color.new(colorDown, 50), style=line.style_dotted, width=1)
+            label.new(fibEnd, w4a, "4A  0.236", color=color.new(color.gray, 100), style=label.style_label_left, textcolor=colorDown, size=size.tiny)
+
+            line.new(fibStart, w4b, fibEnd, w4b, color=color.new(colorDown, 60), style=line.style_dotted, width=1)
+            label.new(fibEnd, w4b, "4B  0.500", color=color.new(color.gray, 100), style=label.style_label_left, textcolor=colorDown, size=size.tiny)
+
+            line.new(fibStart, w4c, fibEnd, w4c, color=color.new(colorDown, 30), style=line.style_dashed, width=1)
+            label.new(fibEnd, w4c, "4C  0.382", color=color.new(color.gray, 100), style=label.style_label_left, textcolor=colorDown, size=size.tiny)
+
+            // Wave 5 target
+            line.new(fibStart, w5, fibEnd, w5, color=color.new(colorProj, 20), style=line.style_dashed, width=2)
+            label.new(fibEnd, w5, "(5)  1.000", color=color.new(color.gray, 100), style=label.style_label_left, textcolor=colorProj, size=size.tiny)
+
+        // ——— Wave Target Table ———
+        if showTable
+            // EW Confidence score
+            conf = ewConfidence(array.size(px))
+            confStr = str.tostring(math.round(conf)) + "%"
+            confColor = conf >= 70 ? color.new(color.green, 20) : conf >= 40 ? color.new(color.orange, 20) : color.new(color.red, 20)
+
+            table tbl = table.new(position.bottom_right, 5, 13, border_width=1, border_color=color.new(color.gray, 60), frame_width=2, frame_color=color.new(color.gray, 40))
+
+            // Header row
+            hdrBg = color.new(#1a1a2e, 10)
+            table.cell(tbl, 0, 0, "Wave",   bgcolor=hdrBg, text_color=color.white, text_size=tblSz)
+            table.cell(tbl, 1, 0, "Label",  bgcolor=hdrBg, text_color=color.white, text_size=tblSz)
+            table.cell(tbl, 2, 0, "Fib",    bgcolor=hdrBg, text_color=color.white, text_size=tblSz)
+            table.cell(tbl, 3, 0, "Target", bgcolor=hdrBg, text_color=color.white, text_size=tblSz)
+            table.cell(tbl, 4, 0, "% Chg",  bgcolor=hdrBg, text_color=color.white, text_size=tblSz)
+
+            float cycle0Net_tbl = w5 - originP
+            int tblRow = 1
+            int sCount = 1
+            string activeWaveName = ""
+            
+            while tblRow <= 9 and sCount <= 30
+                effAbsIdx_tbl = simI + sCount
+                cycleNum_tbl  = int(math.floor(effAbsIdx_tbl / 9))
+                currIdx_tbl   = effAbsIdx_tbl % 9
+
+                cycleSign_tbl = (cycleNum_tbl % 2 == 0) ? 1.0 : -1.0
+                activeDir_tbl = (isBull ? 1.0 : -1.0) * cycleSign_tbl
+
+                float priorMove = 0.0
+                if cycleNum_tbl == 1
+                    priorMove := cycle0Net_tbl
+                else if cycleNum_tbl >= 2
+                    priorMove := (cycleNum_tbl % 2 == 1) ? cycle0Net_tbl : 0.0
+
+                cw1 = activeDir_tbl * len1
+                cw2 = cw1 - activeDir_tbl * len2
+                cw3 = cw2 + activeDir_tbl * len3
+                cw4 = cw3 - activeDir_tbl * len4
+                cw5 = cw4 + activeDir_tbl * len5
+
+                cw2a = cw1 - activeDir_tbl * len1 * 0.382
+                cw2b = cw2a + activeDir_tbl * (math.abs(cw1 - cw2a) * 0.5)
+                cw2c = cw2
+
+                cw4a = cw3 - activeDir_tbl * len3 * 0.236
+                cw4b = cw4a + activeDir_tbl * (math.abs(cw3 - cw4a) * 0.5)
+                cw4c = cw4
+
+                float relTp = 0.0
+                string wn = ""
+                string wl = ""
+                string wf = ""
+
+                if cycleNum_tbl % 2 == 1
+                    // Corrective Cycle
+                    if currIdx_tbl == 0
+                        relTp := cw1
+                        wn := "Wave A"
+                        wl := "A"
+                        wf := "1.000x"
+                    else if currIdx_tbl == 1
+                        relTp := cw2a
+                        wl := ""
+                    else if currIdx_tbl == 2
+                        relTp := cw2b
+                        wl := ""
+                    else if currIdx_tbl == 3
+                        relTp := cw2c
+                        wn := "Wave B"
+                        wl := "B"
+                        wf := "0.618x"
+                    else if currIdx_tbl == 4
+                        relTp := cw3
+                        wn := "Wave C"
+                        wl := "C"
+                        wf := "1.618x"
+                    else if currIdx_tbl == 5
+                        relTp := cw4a
+                        wl := ""
+                    else if currIdx_tbl == 6
+                        relTp := cw4b
+                        wl := ""
+                    else if currIdx_tbl == 7
+                        relTp := cw4c
+                        wn := "Wave X"
+                        wl := "X"
+                        wf := "0.382x"
+                    else if currIdx_tbl == 8
+                        relTp := cw5
+                        wn := "Wave Y"
+                        wl := "Y"
+                        wf := "1.000x"
+                else
+                    // Motive Cycle
+                    if currIdx_tbl == 0
+                        relTp := cw1
+                        wn := "Wave 1"
+                        wl := "(1)"
+                        wf := "1.00x W1"
+                    else if currIdx_tbl == 1
+                        relTp := cw2a
+                        wn := "Wave 2A"
+                        wl := "A"
+                        wf := "0.382x"
+                    else if currIdx_tbl == 2
+                        relTp := cw2b
+                        wn := "Wave 2B"
+                        wl := "B"
+                        wf := "0.500x"
+                    else if currIdx_tbl == 3
+                        relTp := cw2c
+                        wn := "Wave 2C"
+                        wl := "(2)"
+                        wf := "0.618x"
+                    else if currIdx_tbl == 4
+                        relTp := cw3
+                        wn := "Wave 3"
+                        wl := "(3)"
+                        wf := "1.618x W1"
+                    else if currIdx_tbl == 5
+                        relTp := cw4a
+                        wn := "Wave 4A"
+                        wl := "A"
+                        wf := "0.236x"
+                    else if currIdx_tbl == 6
+                        relTp := cw4b
+                        wn := "Wave 4B"
+                        wl := "B"
+                        wf := "0.500x"
+                    else if currIdx_tbl == 7
+                        relTp := cw4c
+                        wn := "Wave 4C"
+                        wl := "(4)"
+                        wf := "0.382x"
+                    else if currIdx_tbl == 8
+                        relTp := cw5
+                        wn := "Wave 5"
+                        wl := "(5)"
+                        wf := "1.00x W1"
+                
+                if wl != ""
+                    float wPrice_tbl = originP + priorMove + relTp
+                    wPrice_tbl := math.max(0.01, wPrice_tbl)
+
+                    rowBg = tblRow == 1 ? color.new(colorProj, 60) : color.new(color.gray, 95)
+                    txtCol = tblRow == 1 ? color.white : color.new(color.gray, 30)
+                    
+                    priceStr = str.tostring(wPrice_tbl, "#.##")
+                    pctChg = close != 0 ? ((wPrice_tbl - close) / close) * 100.0 : 0.0
+                    pctStr = (pctChg >= 0 ? "+" : "") + str.tostring(math.round(pctChg * 10) / 10, "#.#") + "%"
+                    pctCol = pctChg >= 0 ? color.new(color.green, 20) : color.new(color.red, 20)
+
+                    displayWn = tblRow == 1 ? "> " + wn : wn
+                    if tblRow == 1
+                        activeWaveName := wn
+
+                    table.cell(tbl, 0, tblRow, displayWn, bgcolor=rowBg, text_color=txtCol, text_size=tblSzSm)
+                    table.cell(tbl, 1, tblRow, wl,      bgcolor=rowBg, text_color=txtCol, text_size=tblSz)
+                    table.cell(tbl, 2, tblRow, wf,      bgcolor=rowBg, text_color=txtCol, text_size=tblSzSm)
+                    table.cell(tbl, 3, tblRow, priceStr, bgcolor=rowBg, text_color=txtCol, text_size=tblSzSm)
+                    table.cell(tbl, 4, tblRow, pctStr,  bgcolor=rowBg, text_color=pctCol, text_size=tblSzSm)
+                    
+                    tblRow += 1
+                
+                sCount += 1
+
+            // Separator row (row 10)
+            sepBg = color.new(color.gray, 80)
+            table.cell(tbl, 0, 10, "─────", bgcolor=sepBg, text_color=color.gray, text_size=tblSzSm)
+            table.cell(tbl, 1, 10, "─────", bgcolor=sepBg, text_color=color.gray, text_size=tblSzSm)
+            table.cell(tbl, 2, 10, "─────", bgcolor=sepBg, text_color=color.gray, text_size=tblSzSm)
+            table.cell(tbl, 3, 10, "─────", bgcolor=sepBg, text_color=color.gray, text_size=tblSzSm)
+            table.cell(tbl, 4, 10, "─────", bgcolor=sepBg, text_color=color.gray, text_size=tblSzSm)
+
+            // Trend row (row 11)
+            trendBg = isBull ? color.new(colorUp, 50) : color.new(colorDown, 50)
+            table.cell(tbl, 0, 11, "Trend",                      bgcolor=trendBg, text_color=color.white, text_size=tblSzSm)
+            table.cell(tbl, 1, 11, isBull ? "^ Bull" : "v Bear", bgcolor=trendBg, text_color=color.white, text_size=tblSzSm)
+            table.cell(tbl, 2, 11, "Next",                         bgcolor=trendBg, text_color=color.white, text_size=tblSzSm)
+            table.cell(tbl, 3, 11, activeWaveName,                 bgcolor=trendBg, text_color=color.white, text_size=tblSzSm)
+            table.cell(tbl, 4, 11, "",                             bgcolor=trendBg, text_color=color.white, text_size=tblSzSm)
+
+            // Confidence row (row 12)
+            table.cell(tbl, 0, 12, "EW Score",  bgcolor=confColor, text_color=color.white, text_size=tblSzSm)
+            table.cell(tbl, 1, 12, confStr,      bgcolor=confColor, text_color=color.white, text_size=tblSzSm)
+            table.cell(tbl, 2, 12, "Origin",     bgcolor=confColor, text_color=color.white, text_size=tblSzSm)
+            table.cell(tbl, 3, 12, str.tostring(originP, "#.##"), bgcolor=confColor, text_color=color.white, text_size=tblSzSm)
+            table.cell(tbl, 4, 12, "",            bgcolor=confColor, text_color=color.white, text_size=tblSzSm)
+
+        // ─── Alternate Wave Target Table ───
+        if showTable and showAlt
+            table altTbl = table.new(position.bottom_left, 5, 13, border_width=1, border_color=color.new(color.gray, 60), frame_width=2, frame_color=color.new(color.gray, 40))
+
+            // Header row
+            altHdrBg = color.new(#1a1a2e, 10)
+            table.cell(altTbl, 0, 0, "Alt Wave",  bgcolor=altHdrBg, text_color=color.white, text_size=tblSz)
+            table.cell(altTbl, 1, 0, "Label", bgcolor=altHdrBg, text_color=color.white, text_size=tblSz)
+            table.cell(altTbl, 2, 0, "Fib",   bgcolor=altHdrBg, text_color=color.white, text_size=tblSz)
+            table.cell(altTbl, 3, 0, "Target",bgcolor=altHdrBg, text_color=color.white, text_size=tblSz)
+            table.cell(altTbl, 4, 0, "% Chg", bgcolor=altHdrBg, text_color=color.white, text_size=tblSz)
+
+            bool altIsBull = not isBull
+            float altDir0 = altIsBull ? 1.0 : -1.0
+            float alt_r_w1 = altDir0 * len1
+            float alt_r_w2 = alt_r_w1 - altDir0 * len2
+            float alt_r_w3 = alt_r_w2 + altDir0 * len3
+            float alt_r_w4 = alt_r_w3 - altDir0 * len4
+            float alt_r_w5 = alt_r_w4 + altDir0 * len5
+            
+            float safeAltOriginP = na(altOriginP) or altOriginP <= 0 ? curP : altOriginP
+            float alt_w5 = safeAltOriginP + alt_r_w5
+            float altCycle0Net = alt_w5 - safeAltOriginP
+
+            int altTblRow = 1
+            int altSCount = 1
+            string altActiveWaveName = ""
+            int safeAltSimI = na(altSimI) ? 0 : altSimI
+            
+            while altTblRow <= 9 and altSCount <= 30
+                effAbsIdx_tbl = safeAltSimI + altSCount
+                if effAbsIdx_tbl < 0
+                    effAbsIdx_tbl := 0
+                cycleNum_tbl  = int(math.floor(effAbsIdx_tbl / 9))
+                currIdx_tbl   = effAbsIdx_tbl % 9
+
+                cycleSign_tbl = (cycleNum_tbl % 2 == 0) ? 1.0 : -1.0
+                activeDir_tbl = altDir0 * cycleSign_tbl
+
+                float priorMove = 0.0
+                if cycleNum_tbl == 1
+                    priorMove := altCycle0Net
+                else if cycleNum_tbl >= 2
+                    priorMove := (cycleNum_tbl % 2 == 1) ? altCycle0Net : 0.0
+
+                cw1 = activeDir_tbl * len1
+                cw2 = cw1 - activeDir_tbl * len2
+                cw3 = cw2 + activeDir_tbl * len3
+                cw4 = cw3 - activeDir_tbl * len4
+                cw5 = cw4 + activeDir_tbl * len5
+
+                cw2a = cw1 - activeDir_tbl * len1 * 0.382
+                cw2b = cw2a + activeDir_tbl * (math.abs(cw1 - cw2a) * 0.5)
+                cw2c = cw2
+
+                cw4a = cw3 - activeDir_tbl * len3 * 0.236
+                cw4b = cw4a + activeDir_tbl * (math.abs(cw3 - cw4a) * 0.5)
+                cw4c = cw4
+
+                float relTp = 0.0
+                string wn = ""
+                string wl = ""
+                string wf = ""
+
+                if cycleNum_tbl % 2 == 1
+                    if currIdx_tbl == 0
+                        relTp := cw1
+                        wn := "Wave A"
+                        wl := "A"
+                        wf := "1.000x"
+                    else if currIdx_tbl == 1
+                        relTp := cw2a
+                        wl := ""
+                    else if currIdx_tbl == 2
+                        relTp := cw2b
+                        wl := ""
+                    else if currIdx_tbl == 3
+                        relTp := cw2c
+                        wn := "Wave B"
+                        wl := "B"
+                        wf := "0.618x"
+                    else if currIdx_tbl == 4
+                        relTp := cw3
+                        wn := "Wave C"
+                        wl := "C"
+                        wf := "1.618x"
+                    else if currIdx_tbl == 5
+                        relTp := cw4a
+                        wl := ""
+                    else if currIdx_tbl == 6
+                        relTp := cw4b
+                        wl := ""
+                    else if currIdx_tbl == 7
+                        relTp := cw4c
+                        wn := "Wave X"
+                        wl := "X"
+                        wf := "0.382x"
+                    else if currIdx_tbl == 8
+                        relTp := cw5
+                        wn := "Wave Y"
+                        wl := "Y"
+                        wf := "1.000x"
+                else
+                    if currIdx_tbl == 0
+                        relTp := cw1
+                        wn := "Wave 1"
+                        wl := "(1)"
+                        wf := "1.00x W1"
+                    else if currIdx_tbl == 1
+                        relTp := cw2a
+                        wn := "Wave 2A"
+                        wl := "A"
+                        wf := "0.382x"
+                    else if currIdx_tbl == 2
+                        relTp := cw2b
+                        wn := "Wave 2B"
+                        wl := "B"
+                        wf := "0.500x"
+                    else if currIdx_tbl == 3
+                        relTp := cw2c
+                        wn := "Wave 2C"
+                        wl := "(2)"
+                        wf := "0.618x"
+                    else if currIdx_tbl == 4
+                        relTp := cw3
+                        wn := "Wave 3"
+                        wl := "(3)"
+                        wf := "1.618x W1"
+                    else if currIdx_tbl == 5
+                        relTp := cw4a
+                        wn := "Wave 4A"
+                        wl := "A"
+                        wf := "0.236x"
+                    else if currIdx_tbl == 6
+                        relTp := cw4b
+                        wn := "Wave 4B"
+                        wl := "B"
+                        wf := "0.500x"
+                    else if currIdx_tbl == 7
+                        relTp := cw4c
+                        wn := "Wave 4C"
+                        wl := "(4)"
+                        wf := "0.382x"
+                    else if currIdx_tbl == 8
+                        relTp := cw5
+                        wn := "Wave 5"
+                        wl := "(5)"
+                        wf := "1.00x W1"
+                
+                if wl != ""
+                    float wPrice_tbl = altOriginP + priorMove + relTp
+                    wPrice_tbl := math.max(0.01, wPrice_tbl)
+
+                    rowBg = altTblRow == 1 ? color.new(colorAlt, 60) : color.new(color.gray, 95)
+                    txtCol = altTblRow == 1 ? color.white : color.new(color.gray, 30)
+                    
+                    priceStr = str.tostring(wPrice_tbl, "#.##")
+                    pctChg = close != 0 ? ((wPrice_tbl - close) / close) * 100.0 : 0.0
+                    pctStr = (pctChg >= 0 ? "+" : "") + str.tostring(math.round(pctChg * 10) / 10, "#.#") + "%"
+                    pctCol = pctChg >= 0 ? color.new(color.green, 20) : color.new(color.red, 20)
+
+                    displayWn = altTblRow == 1 ? "> " + wn : wn
+                    if altTblRow == 1
+                        altActiveWaveName := wn
+
+                    table.cell(altTbl, 0, altTblRow, displayWn, bgcolor=rowBg, text_color=txtCol, text_size=tblSzSm)
+                    table.cell(altTbl, 1, altTblRow, wl,      bgcolor=rowBg, text_color=txtCol, text_size=tblSz)
+                    table.cell(altTbl, 2, altTblRow, wf,      bgcolor=rowBg, text_color=txtCol, text_size=tblSzSm)
+                    table.cell(altTbl, 3, altTblRow, priceStr, bgcolor=rowBg, text_color=txtCol, text_size=tblSzSm)
+                    table.cell(altTbl, 4, altTblRow, pctStr,  bgcolor=rowBg, text_color=pctCol, text_size=tblSzSm)
+                    
+                    altTblRow += 1
+                
+                altSCount += 1
+
+            // Separator row (row 10)
+            sepBgAlt = color.new(color.gray, 80)
+            table.cell(altTbl, 0, 10, "─────", bgcolor=sepBgAlt, text_color=color.gray, text_size=tblSzSm)
+            table.cell(altTbl, 1, 10, "─────", bgcolor=sepBgAlt, text_color=color.gray, text_size=tblSzSm)
+            table.cell(altTbl, 2, 10, "─────", bgcolor=sepBgAlt, text_color=color.gray, text_size=tblSzSm)
+            table.cell(altTbl, 3, 10, "─────", bgcolor=sepBgAlt, text_color=color.gray, text_size=tblSzSm)
+            table.cell(altTbl, 4, 10, "─────", bgcolor=sepBgAlt, text_color=color.gray, text_size=tblSzSm)
+
+            // Trend row (row 11)
+            altTrendBg = altIsBull ? color.new(colorUp, 50) : color.new(colorDown, 50)
+            table.cell(altTbl, 0, 11, "Alt Trend",                 bgcolor=altTrendBg, text_color=color.white, text_size=tblSzSm)
+            table.cell(altTbl, 1, 11, altIsBull ? "^ Bull" : "v Bear", bgcolor=altTrendBg, text_color=color.white, text_size=tblSzSm)
+            table.cell(altTbl, 2, 11, "Next",                      bgcolor=altTrendBg, text_color=color.white, text_size=tblSzSm)
+            table.cell(altTbl, 3, 11, altActiveWaveName,           bgcolor=altTrendBg, text_color=color.white, text_size=tblSzSm)
+            table.cell(altTbl, 4, 11, "",                          bgcolor=altTrendBg, text_color=color.white, text_size=tblSzSm)
+
+            // Confidence row (row 12)
+            table.cell(altTbl, 0, 12, "Origin", bgcolor=color.new(color.gray, 60), text_color=color.white, text_size=tblSzSm)
+            table.cell(altTbl, 1, 12, str.tostring(safeAltOriginP, "#.##"), bgcolor=color.new(color.gray, 60), text_color=color.white, text_size=tblSzSm)
+            table.cell(altTbl, 2, 12, "", bgcolor=color.new(color.gray, 60), text_color=color.white, text_size=tblSzSm)
+            table.cell(altTbl, 3, 12, "", bgcolor=color.new(color.gray, 60), text_color=color.white, text_size=tblSzSm)
+            table.cell(altTbl, 4, 12, "", bgcolor=color.new(color.gray, 60), text_color=color.white, text_size=tblSzSm)
+
+
