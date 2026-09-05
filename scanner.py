@@ -274,8 +274,9 @@ def scan_tf(coin, df, hours):
 
 
 def build_report(results, oi, tfs, title):
-    """Grid: one row per coin, one column per timeframe. Columns are 8 wide so
-    three of them still fit a phone without wrapping."""
+    """The original layout: 10-char coin column, 14-char timeframe columns,
+    NEW spelled out, legend printed with every message. Posting is now gated on
+    a candle close rather than the hourly tick, which was the actual complaint."""
     rows = []
     for c in COINS:
         cells = [results.get((c, t), (None, None))[0] for t in tfs]
@@ -290,43 +291,29 @@ def build_report(results, oi, tfs, title):
             det = results.get((c, t), (None, {}))[1] or {}
             x = cell + (flame if det.get("pat") else "")
             if det.get("fresh"):
-                x += "\u2022"
+                x += " NEW"
             elif det.get("age"):
-                x += f" {det['age']}"
+                x += f" {det['age']}b"
             out.append(x)
         rows.append((c, out))
     if not rows:
         return None
-    when = dt.datetime.now(dt.timezone.utc).strftime("%d %b %H:%M")
-    hdr = "".join(f"{(f'{t}h' if t < 24 else '1d'):>9}" for t in tfs)
-    L = [f"`{title}` \u00b7 `{when} UTC` \u00b7 {len(rows)}/{len(COINS)}",
-         "```", f"{'':<8}{hdr}"]
+    when = dt.datetime.now(dt.timezone.utc).strftime("%d %b %H:%M UTC")
+    L = [f"**PATTERN SCAN \u00b7 {title} \u00b7 {when}**",
+         f"{len(rows)} of {len(COINS)} coins", "```",
+         f"{'COIN':<10}" + "".join(f"{(f'{t}h' if t < 24 else '1d'):>14}" for t in tfs)]
     for c, out in rows:
-        L.append(f"{c:<8}" + "".join(f"{o:>9}" for o in out))
-    L.append("```")
+        L.append(f"{c:<10}" + "".join(f"{o:>14}" for o in out))
+    L += ["```",
+          "S strong \u00b7 R regular \u00b7 H hidden (+ osc count) \u00b7 "
+          "\U0001F525 OI expanding \u00b7 NEW = this bar",
+          "_DT DB double \u00b7 TT TB triple \u00b7 HS IH head&sh \u00b7 "
+          "FB FR flag \u00b7 PB PR pennant_",
+          "_WR WF wedge \u00b7 TA asc TD desc TS symm \u00b7 RC rect \u00b7 CU CI cup_"]
     return "\n".join(L)
 
 
-LEGEND = """**LEGEND**
-```
-DT DB  double top / bottom
-TT TB  triple top / bottom
-HS IH  head & shoulders / inv
-FB FR  flag  bull / bear
-PB PR  pennant  bull / bear
-WR WF  wedge  rising / falling
-TA TD  triangle  asc / desc
-TS     triangle  symmetrical
-RC     rectangle
-CU CI  cup & handle / inv
-
-S6 R3 H4   divergence: strong,
-           regular, hidden + count
-
-\U0001F525  open interest expanding
-\u2022  fired this bar
-number  bars since it fired
-```"""
+LEGEND = None
 
 
 def post(msg, webhook, dry=False):
@@ -411,10 +398,6 @@ def run_once(dry=False):
                    any((results.get((c, t), (None, {}))[1] or {}).get("fresh")
                        for c in COINS) for t in tfs)
     fast_new, mid_new, slow_new = any_new(FAST_TFS), any_new(MID_TFS), any_new(SLOW_TFS)
-    if not _legend_sent:
-        for w in {WH_FAST, WH_MID, WH_SLOW}:
-            post(LEGEND, w, dry)
-        _legend_sent = True
     if fast_new:
         post(build_report(results, oi, FAST_TFS, "4h"), WH_FAST, dry)
     else:
