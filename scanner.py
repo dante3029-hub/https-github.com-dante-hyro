@@ -268,78 +268,59 @@ def scan_tf(coin, df, hours):
 
 
 def build_report(results, oi, tfs, title):
-    """Three blocks: what just fired, what is still running, and divergence-only
-    rows kept apart so they do not dilute the top section. Codes rather than
-    full names keeps every line inside a phone's width; the legend is posted
-    once at startup instead of on every scan."""
-    fired, active, divonly = [], [], []
+    """Grid: one row per coin, one column per timeframe. Columns are 8 wide so
+    three of them still fit a phone without wrapping."""
+    rows = []
     for c in COINS:
-        for t in tfs:
-            cell, det = results.get((c, t), (None, None))
-            if not det:
+        cells = [results.get((c, t), (None, None))[0] for t in tfs]
+        if not any(cells):
+            continue
+        flame = "\U0001F525" if oi.get(c, (None, None))[0] else ""
+        out = []
+        for cell, t in zip(cells, tfs):
+            if not cell:
+                out.append("\u00b7")
                 continue
-            flame = "\U0001F525" if oi.get(c, (None, None))[0] else "  "
-            tf = f"{t}h" if t < 24 else "1d"
-            pat, dv = det.get("pat"), det.get("div")
-            dtxt = ""
-            if dv:
-                letter = "S" if dv["strong"] else ("H" if dv["kind"] == "hidden" else "R")
-                dtxt = f"{letter}{dv['count']}"
-            if pat:
-                code = CODE.get(pat[3], pat[3][:2])
-                row = (flame, c, code, tf, dtxt if det["fresh"] else str(det.get("age") or ""))
-                (fired if det["fresh"] else active).append(row)
-            elif dv:
-                divonly.append((flame, c, dtxt, tf, "" if det["fresh"] else str(det.get("age") or "")))
-
-    if not (fired or active or divonly):
+            det = results.get((c, t), (None, {}))[1] or {}
+            x = cell + (flame if det.get("pat") else "")
+            if det.get("fresh"):
+                x += "\u2022"
+            elif det.get("age"):
+                x += f" {det['age']}"
+            out.append(x)
+        rows.append((c, out))
+    if not rows:
         return None
-
     when = dt.datetime.now(dt.timezone.utc).strftime("%d %b %H:%M")
-    L = [f"`{title}` \u00b7 `{when} UTC`", "```"]
-
-    def block(name, rows, width=31):
-        if not rows:
-            return
-        bar = "\u2500" * max(3, width - len(name) - 5)
-        L.append(f"\u2500\u2500 {name} {bar}")
-        for flame, c, code, tf, extra in rows:
-            L.append(f"{flame} {c:<9}{code:<5}{tf:>4}  {extra:>3}")
-        L.append("")
-
-    block("JUST FIRED", fired)
-    block("STILL ACTIVE", active)
-    block("DIVERGENCE ONLY", divonly)
-    if L[-1] == "":
-        L.pop()
+    hdr = "".join(f"{(f'{t}h' if t < 24 else '1d'):>9}" for t in tfs)
+    L = [f"`{title}` \u00b7 `{when} UTC` \u00b7 {len(rows)}/{len(COINS)}",
+         "```", f"{'':<8}{hdr}"]
+    for c, out in rows:
+        L.append(f"{c:<8}" + "".join(f"{o:>9}" for o in out))
     L.append("```")
     return "\n".join(L)
 
 
 LEGEND = """**LEGEND**
 ```
-PATTERNS
-  DT DB  double top / bottom
-  TT TB  triple top / bottom
-  HS IH  head & shoulders / inverted
-  FB FR  flag  bull / bear
-  PB PR  pennant  bull / bear
-  WR WF  wedge  rising / falling
-  TA TD  triangle  ascending / descending
-  TS     triangle  symmetrical
-  RC     rectangle
-  CU CI  cup & handle / inverted
+DT DB  double top / bottom
+TT TB  triple top / bottom
+HS IH  head & shoulders / inv
+FB FR  flag  bull / bear
+PB PR  pennant  bull / bear
+WR WF  wedge  rising / falling
+TA TD  triangle  asc / desc
+TS     triangle  symmetrical
+RC     rectangle
+CU CI  cup & handle / inv
 
-DIVERGENCE
-  S6     strong, 6 oscillators
-  R3     regular, 3
-  H4     hidden, 4
+S6 R3 H4   divergence: strong,
+           regular, hidden + count
 
-MARKERS
-  \U0001F525     open interest expanding
-  number bars since it fired
-```
-_Patterns: breakout-confirmed, shown until replaced._"""
+\U0001F525  open interest expanding
+\u2022  fired this bar
+number  bars since it fired
+```"""
 
 
 def post(msg, webhook, dry=False):
