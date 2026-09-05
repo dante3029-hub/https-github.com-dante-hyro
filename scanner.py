@@ -41,10 +41,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 BYBIT = "https://api.bybit.com"
 WH_FAST = os.environ.get("DISCORD_WEBHOOK_FAST", os.environ.get("DISCORD_WEBHOOK", ""))
+WH_MID  = os.environ.get("DISCORD_WEBHOOK_MID", WH_FAST)
 WH_SLOW = os.environ.get("DISCORD_WEBHOOK_SLOW", WH_FAST)
 STATE = os.path.expanduser("~/scanner_state.json")
 
-FAST_TFS = [4, 5]
+# 4h and 5h closes only coincide at 00:00 and 20:00, so posting them together
+# meant one column was always stale. Separate channels give every post a column
+# that just closed. 6h/12h/1d nest cleanly so they stay together.
+FAST_TFS = [4]
+MID_TFS  = [5]
 SLOW_TFS = [6, 12, 24]
 # The most recent signal is shown until a NEWER one replaces it -- mirroring the
 # indicator's own max_patterns=1 behaviour, where a drawn pattern stays on the
@@ -368,7 +373,7 @@ def run_once(dry=False):
                 log(f"  [{i}/{len(COINS)}] {c}: no data")
                 continue
             hit = False
-            for t in FAST_TFS + SLOW_TFS:
+            for t in FAST_TFS + MID_TFS + SLOW_TFS:
                 cell, det = scan_tf(c, df, t)
                 if cell:
                     results[(c, t)] = (cell, det)
@@ -377,7 +382,7 @@ def run_once(dry=False):
                 oi[c] = oi_state(c)
                 log(f"  [{i}/{len(COINS)}] {c}: "
                     + ", ".join(f"{t}h={results[(c,t)][0]}"
-                                for t in FAST_TFS+SLOW_TFS if (c, t) in results))
+                                for t in FAST_TFS+MID_TFS+SLOW_TFS if (c, t) in results))
         except Exception as e:
             log(f"  [{i}/{len(COINS)}] {c}: {type(e).__name__}: {e}")
         time.sleep(0.1)
@@ -388,7 +393,7 @@ def run_once(dry=False):
     st = load_state()
     seen = st.get("last_bar", {})
     advanced = {}
-    for t in FAST_TFS + SLOW_TFS:
+    for t in FAST_TFS + MID_TFS + SLOW_TFS:
         cur = None
         for c in COINS:
             det = results.get((c, t), (None, {}))[1] or {}
@@ -401,24 +406,27 @@ def run_once(dry=False):
     if not dry:
         save_state(st)
 
-    fast_new = any(advanced[t] and
+    def any_new(tfs):
+        return any(advanced[t] and
                    any((results.get((c, t), (None, {}))[1] or {}).get("fresh")
-                       for c in COINS) for t in FAST_TFS)
-    slow_new = any(advanced[t] and
-                   any((results.get((c, t), (None, {}))[1] or {}).get("fresh")
-                       for c in COINS) for t in SLOW_TFS)
+                       for c in COINS) for t in tfs)
+    fast_new, mid_new, slow_new = any_new(FAST_TFS), any_new(MID_TFS), any_new(SLOW_TFS)
     if not _legend_sent:
-        post(LEGEND, WH_FAST, dry)
-        post(LEGEND, WH_SLOW, dry)
+        for w in {WH_FAST, WH_MID, WH_SLOW}:
+            post(LEGEND, w, dry)
         _legend_sent = True
     if fast_new:
-        post(build_report(results, oi, FAST_TFS, "4h \u00b7 5h"), WH_FAST, dry)
+        post(build_report(results, oi, FAST_TFS, "4h"), WH_FAST, dry)
     else:
-        log("  fast: nothing new this hour -- not posting")
+        log("  4h: nothing new -- not posting")
+    if mid_new:
+        post(build_report(results, oi, MID_TFS, "5h"), WH_MID, dry)
+    else:
+        log("  5h: nothing new -- not posting")
     if slow_new:
         post(build_report(results, oi, SLOW_TFS, "6h \u00b7 12h \u00b7 1d"), WH_SLOW, dry)
     else:
-        log("  slow: nothing new this hour -- not posting")
+        log("  6h/12h/1d: nothing new -- not posting")
     if not results:
         log("  nothing to report")
 
