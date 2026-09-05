@@ -264,7 +264,8 @@ def scan_tf(coin, df, hours):
         if d_age == 0:
             fresh = True
         age = d_age if age is None else min(age, d_age)
-    return " ".join(parts), dict(pat=pat, div=dv, fresh=fresh, tf=hours, age=age)
+    return " ".join(parts), dict(pat=pat, div=dv, fresh=fresh, tf=hours, age=age,
+                                 bar_time=str(d.index[last_bar]))
 
 
 def build_report(results, oi, tfs, title):
@@ -380,13 +381,32 @@ def run_once(dry=False):
         except Exception as e:
             log(f"  [{i}/{len(COINS)}] {c}: {type(e).__name__}: {e}")
         time.sleep(0.1)
-    # Only post when at least one signal fired on the bar that just closed.
-    # The loop ticks hourly so it catches every timeframe's close, but posting
-    # every hour regardless would be noise -- most hours nothing new happens.
-    fast_new = any((results.get((c, t), (None, {}))[1] or {}).get("fresh")
-                   for c in COINS for t in FAST_TFS)
-    slow_new = any((results.get((c, t), (None, {}))[1] or {}).get("fresh")
-                   for c in COINS for t in SLOW_TFS)
+    # A signal is "fresh" when it sits on the last CLOSED bar -- but between
+    # closes that bar does not change, so an 08:00 signal stayed fresh at 09:00,
+    # 10:00 and 11:00 and posted every hour. Post only when the bar itself has
+    # ADVANCED since the last post for that timeframe.
+    st = load_state()
+    seen = st.get("last_bar", {})
+    advanced = {}
+    for t in FAST_TFS + SLOW_TFS:
+        cur = None
+        for c in COINS:
+            det = results.get((c, t), (None, {}))[1] or {}
+            if det.get("bar_time"):
+                cur = det["bar_time"] if cur is None else max(cur, det["bar_time"])
+        advanced[t] = bool(cur and seen.get(str(t)) != cur)
+        if cur:
+            seen[str(t)] = cur
+    st["last_bar"] = seen
+    if not dry:
+        save_state(st)
+
+    fast_new = any(advanced[t] and
+                   any((results.get((c, t), (None, {}))[1] or {}).get("fresh")
+                       for c in COINS) for t in FAST_TFS)
+    slow_new = any(advanced[t] and
+                   any((results.get((c, t), (None, {}))[1] or {}).get("fresh")
+                       for c in COINS) for t in SLOW_TFS)
     if not _legend_sent:
         post(LEGEND, WH_FAST, dry)
         post(LEGEND, WH_SLOW, dry)
