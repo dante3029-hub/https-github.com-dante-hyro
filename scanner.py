@@ -58,6 +58,12 @@ SLOW_TFS = [6, 12, 24]
 # silently dropped.
 FRESH_BARS = None           # None = no cutoff, show until replaced
 
+# Per-timeframe age cutoff, in bars. Signals older than this are dropped.
+# 12h and 1d are excluded after a week -- a daily pattern from 3 weeks back is
+# history, not a live setup. The faster timeframes keep the show-until-replaced
+# behaviour, since a 4h signal 20 bars old is still only ~3 days.
+MAX_AGE_BARS = {12: 14, 24: 7}      # 14x12h = 7 days · 7x1d = 7 days
+
 COINS = [
     "AAVE", "ADA", "AIXBT", "ALGO", "APT", "ARB", "ASTER", "ATOM", "AVAX",
     "BCH", "BNB", "BONK", "BTC", "CRV", "DOGE", "DOT", "ETC", "ETH",
@@ -245,6 +251,14 @@ def scan_tf(coin, df, hours):
 
     pat = pats[-1] if pats else None
     dv = div[-1] if div else None
+    cap = MAX_AGE_BARS.get(hours)
+    if cap is not None:
+        if pat and last_bar - pat[0] > cap:
+            pat = None
+        if dv and last_bar - (dv["bar"] + 5) > cap:
+            dv = None
+    if pat is None and dv is None:
+        return None, None
     if FRESH_BARS is not None:
         if pat and last_bar - pat[0] > FRESH_BARS:
             pat = None
