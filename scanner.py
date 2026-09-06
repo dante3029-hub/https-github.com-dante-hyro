@@ -316,6 +316,24 @@ def build_report(results, oi, tfs, title):
 LEGEND = None
 
 
+def load_state():
+    try:
+        with open(STATE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"sent": [], "last_bar": {}}
+
+
+def save_state(st):
+    tmp = STATE + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(st, f)
+        os.replace(tmp, STATE)
+    except OSError as e:
+        log(f"  state save failed: {e}")
+
+
 def post(msg, webhook, dry=False):
     if not msg:
         return
