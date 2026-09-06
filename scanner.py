@@ -62,7 +62,10 @@ FRESH_BARS = None           # None = no cutoff, show until replaced
 # 12h and 1d are excluded after a week -- a daily pattern from 3 weeks back is
 # history, not a live setup. The faster timeframes keep the show-until-replaced
 # behaviour, since a 4h signal 20 bars old is still only ~3 days.
-MAX_AGE_BARS = {12: 14, 24: 7}      # 14x12h = 7 days · 7x1d = 7 days
+# The backtest used a 15-bar maximum hold, so a signal older than that has
+# already run past the horizon it was tested on. 12h and 1d are capped tighter
+# so nothing older than a week shows.
+MAX_AGE_BARS = {4: 15, 5: 15, 6: 15, 12: 14, 24: 7}
 
 COINS = [
     "AAVE", "ADA", "AIXBT", "ALGO", "APT", "ARB", "ASTER", "ATOM", "AVAX",
