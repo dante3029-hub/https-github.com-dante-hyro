@@ -306,7 +306,12 @@ def build_report(results, oi, tfs, title):
                 out.append("\u00b7")
                 continue
             det = results.get((c, t), (None, {}))[1] or {}
-            x = cell + (flame if det.get("pat") else "")
+            # flame marks the PATTERN, not the divergence -- appending it to the
+            # whole cell made "PB H3🔥" read as if it belonged to H3.
+            x = cell
+            if det.get("pat") and flame:
+                bits = cell.split(" ", 1)
+                x = bits[0] + flame + (" " + bits[1] if len(bits) > 1 else "")
             if det.get("fresh"):
                 x += " NEW"
             elif det.get("age"):
