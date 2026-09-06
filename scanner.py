@@ -282,9 +282,14 @@ def scan_tf(coin, df, hours):
     if dv:
         letter = "S" if dv["strong"] else ("H" if dv["kind"] == "hidden" else "R")
         parts.append(f"{letter}{dv['count']}")
-        d_age = last_bar - (dv["bar"] + 5)
-        if d_age == 0:
-            fresh = True
+        # A divergence is CONFIRMED 5 bars after its pivot, but the label on the
+        # chart sits at the PIVOT. Marking it NEW on the confirmation bar read as
+        # "just happened" when it was already 5-6 bars old. Age is now measured
+        # from the pivot, which is what you see on screen.
+        d_conf = last_bar - (dv["bar"] + 5)     # bars since it was confirmed
+        d_age = last_bar - dv["bar"]            # bars since the pivot itself
+        if d_conf == 0:
+            fresh = True                        # newly confirmed -> triggers a post
         age = d_age if age is None else min(age, d_age)
     return " ".join(parts), dict(pat=pat, div=dv, fresh=fresh, tf=hours, age=age,
                                  bar_time=str(d.index[last_bar]))
@@ -312,7 +317,9 @@ def build_report(results, oi, tfs, title):
             if det.get("pat") and flame:
                 bits = cell.split(" ", 1)
                 x = bits[0] + flame + (" " + bits[1] if len(bits) > 1 else "")
-            if det.get("fresh"):
+            # NEW only where the PATTERN fired on this bar. A divergence always
+            # carries its pivot age, since it is never truly new when confirmed.
+            if det.get("fresh") and det.get("pat") and det.get("age") == 0:
                 x += " NEW"
             elif det.get("age"):
                 x += f" {det['age']}b"
