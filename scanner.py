@@ -427,15 +427,18 @@ def run_once(dry=False):
     st = load_state()
     seen = st.get("last_bar", {})
     advanced = {}
+    # Derive the boundary from the CLOCK, not from the data. Taking the max bar
+    # time across coins meant the 5h channel advanced whenever any single coin
+    # got a fresh bar -- which is why it fired roughly every 2 hours instead of
+    # every 5. The canonical last close is a pure function of the current time.
+    now = dt.datetime.now(dt.timezone.utc).replace(minute=0, second=0, microsecond=0)
+    epoch = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
     for t in FAST_TFS + MID_TFS + SLOW_TFS:
-        cur = None
-        for c in COINS:
-            det = results.get((c, t), (None, {}))[1] or {}
-            if det.get("bar_time"):
-                cur = det["bar_time"] if cur is None else max(cur, det["bar_time"])
-        advanced[t] = bool(cur and seen.get(str(t)) != cur)
-        if cur:
-            seen[str(t)] = cur
+        hrs = int((now - epoch).total_seconds() // 3600)
+        last_close = epoch + dt.timedelta(hours=(hrs // t) * t)
+        cur = last_close.isoformat()
+        advanced[t] = seen.get(str(t)) != cur
+        seen[str(t)] = cur
     st["last_bar"] = seen
     if not dry:
         save_state(st)
