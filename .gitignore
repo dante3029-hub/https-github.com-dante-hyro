@@ -9,3 +9,6 @@ __pycache__/
 !price_data/*.csv
 !oi_data/*.csv
 !m5_data/*.csv
+m5/
+m5_data.zip
+!strat8_returns.csv
