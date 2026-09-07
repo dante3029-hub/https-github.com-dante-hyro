@@ -319,10 +319,14 @@ def build_report(results, oi, tfs, title):
                 x = bits[0] + flame + (" " + bits[1] if len(bits) > 1 else "")
             # NEW only where the PATTERN fired on this bar. A divergence always
             # carries its pivot age, since it is never truly new when confirmed.
-            if det.get("fresh") and det.get("pat") and det.get("age") == 0:
+            # NOTE: `elif det.get("age")` treated age 0 as falsy, so a pattern on
+            # the current bar that had not set `fresh` printed with NO marker at
+            # all. Age is now tested against None explicitly.
+            a = det.get("age")
+            if det.get("pat") and a == 0:
                 x += " NEW"
-            elif det.get("age"):
-                x += f" {det['age']}b"
+            elif a is not None and a > 0:
+                x += f" {a}b"
             out.append(x)
         rows.append((c, out))
     if not rows:
