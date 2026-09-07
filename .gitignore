@@ -8,3 +8,4 @@ bot_runtime/
 __pycache__/
 !price_data/*.csv
 !oi_data/*.csv
+!m5_data/*.csv
