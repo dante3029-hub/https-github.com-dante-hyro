@@ -253,17 +253,18 @@ def scan_tf(coin, df, hours):
     div = ddetect(d)
 
     pat = pats[-1] if pats else None
+    det_bar = pat[7] if (pat and len(pat) > 7) else None
     dv = div[-1] if div else None
     cap = MAX_AGE_BARS.get(hours)
     if cap is not None:
-        if pat and last_bar - pat[0] > cap:
+        if pat and last_bar - (det_bar if det_bar is not None else pat[0]) > cap:
             pat = None
         if dv and last_bar - (dv["bar"] + 5) > cap:
             dv = None
     if pat is None and dv is None:
         return None, None
     if FRESH_BARS is not None:
-        if pat and last_bar - pat[0] > FRESH_BARS:
+        if pat and last_bar - (det_bar if det_bar is not None else pat[0]) > FRESH_BARS:
             pat = None
         if dv and last_bar - (dv["bar"] + 5) > FRESH_BARS:
             dv = None
@@ -274,9 +275,12 @@ def scan_tf(coin, df, hours):
     fresh = False
     age = None
     if pat:
-        b, ts, is_bull, name, entry, stop, target = pat
+        b, ts, is_bull, name, entry, stop, target = pat[:7]
         parts.append(CODE.get(name, name[:3]))
-        age = last_bar - b
+        # Age from DETECTION, not the break bar. break_idx scans up to 20 bars
+        # backward, so the break is typically 2-3 bars old and essentially never
+        # 0 -- which meant NEW could never appear on a pattern.
+        age = last_bar - (det_bar if det_bar is not None else b)
         if age == 0:
             fresh = True
     if dv:

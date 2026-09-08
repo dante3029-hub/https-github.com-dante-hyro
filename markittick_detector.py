@@ -463,6 +463,9 @@ def detect(d, gate=None, forming=False):
         b, is_bull, name, e, s, t, start_idx = r
         if frozen_start is not None and abs(start_idx - frozen_start) <= COOLDOWN:
             continue
-        out.append((b, d.index[b], is_bull, name, e, s, t))
+        # `bar` is when the pattern became KNOWN; `b` is the historical break
+        # bar the entry price comes from. Freshness must key off `bar`, since
+        # the break is typically 2-3 bars in the past and never 0.
+        out.append((b, d.index[b], is_bull, name, e, s, t, bar))
         frozen_start = start_idx
     return out
