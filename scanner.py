@@ -274,6 +274,7 @@ def scan_tf(coin, df, hours):
     parts = []
     fresh = False
     age = None
+    just_confirmed = False      # divergence seen for the FIRST time this bar
     if pat:
         b, ts, is_bull, name, entry, stop, target = pat[:7]
         parts.append(CODE.get(name, name[:3]))
@@ -294,8 +295,10 @@ def scan_tf(coin, df, hours):
         d_age = last_bar - dv["bar"]            # bars since the pivot itself
         if d_conf == 0:
             fresh = True                        # newly confirmed -> triggers a post
+            just_confirmed = True
         age = d_age if age is None else min(age, d_age)
     return " ".join(parts), dict(pat=pat, div=dv, fresh=fresh, tf=hours, age=age,
+                                 just_confirmed=just_confirmed,
                                  bar_time=str(d.index[last_bar]))
 
 
@@ -326,8 +329,11 @@ def build_report(results, oi, tfs, title):
             # NOTE: `elif det.get("age")` treated age 0 as falsy, so a pattern on
             # the current bar that had not set `fresh` printed with NO marker at
             # all. Age is now tested against None explicitly.
+            # NEW = first time this signal is visible. For a pattern that is
+            # age 0; for a divergence it is age 5, because a pivot cannot be
+            # confirmed until 5 bars after it forms. Both are "new to you".
             a = det.get("age")
-            if det.get("pat") and a == 0:
+            if (det.get("pat") and a == 0) or det.get("just_confirmed"):
                 x += " NEW"
             elif a is not None and a > 0:
                 x += f" {a}b"
