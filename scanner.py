@@ -43,6 +43,7 @@ BYBIT = "https://api.bybit.com"
 WH_FAST = os.environ.get("DISCORD_WEBHOOK_FAST", os.environ.get("DISCORD_WEBHOOK", ""))
 WH_MID  = os.environ.get("DISCORD_WEBHOOK_MID", WH_FAST)
 WH_6H   = os.environ.get("DISCORD_WEBHOOK_6H", WH_FAST)
+WH_6H   = os.environ.get("DISCORD_WEBHOOK_6H", WH_FAST)
 WH_SLOW = os.environ.get("DISCORD_WEBHOOK_SLOW", WH_FAST)
 STATE = os.path.expanduser("~/scanner_state.json")
 
