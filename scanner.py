@@ -42,15 +42,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 BYBIT = "https://api.bybit.com"
 WH_FAST = os.environ.get("DISCORD_WEBHOOK_FAST", os.environ.get("DISCORD_WEBHOOK", ""))
 WH_MID  = os.environ.get("DISCORD_WEBHOOK_MID", WH_FAST)
+WH_6H   = os.environ.get("DISCORD_WEBHOOK_6H", WH_FAST)
 WH_SLOW = os.environ.get("DISCORD_WEBHOOK_SLOW", WH_FAST)
 STATE = os.path.expanduser("~/scanner_state.json")
 
 # 4h and 5h closes only coincide at 00:00 and 20:00, so posting them together
 # meant one column was always stale. Separate channels give every post a column
 # that just closed. 6h/12h/1d nest cleanly so they stay together.
+# One channel per cadence: 6h fires 4x a day and would bury 12h (2x) and
+# daily (1x) if they shared a feed.
 FAST_TFS = [4]
 MID_TFS  = [5]
-SLOW_TFS = [6, 12, 24]
+SIX_TFS  = [6]
+SLOW_TFS = [12, 24]
 # The most recent signal is shown until a NEWER one replaces it -- mirroring the
 # indicator's own max_patterns=1 behaviour, where a drawn pattern stays on the
 # chart until the next one appears. NEW marks the bar it fired on; anything older
@@ -421,7 +425,7 @@ def run_once(dry=False):
                 log(f"  [{i}/{len(COINS)}] {c}: no data")
                 continue
             hit = False
-            for t in FAST_TFS + MID_TFS + SLOW_TFS:
+            for t in FAST_TFS + MID_TFS + SIX_TFS + SLOW_TFS:
                 cell, det = scan_tf(c, df, t)
                 if cell:
                     results[(c, t)] = (cell, det)
@@ -430,7 +434,7 @@ def run_once(dry=False):
                 oi[c] = oi_state(c)
                 log(f"  [{i}/{len(COINS)}] {c}: "
                     + ", ".join(f"{t}h={results[(c,t)][0]}"
-                                for t in FAST_TFS+MID_TFS+SLOW_TFS if (c, t) in results))
+                                for t in FAST_TFS+MID_TFS+SIX_TFS+SLOW_TFS if (c, t) in results))
         except Exception as e:
             log(f"  [{i}/{len(COINS)}] {c}: {type(e).__name__}: {e}")
         time.sleep(0.1)
@@ -461,7 +465,8 @@ def run_once(dry=False):
         return any(advanced[t] and
                    any((results.get((c, t), (None, {}))[1] or {}).get("fresh")
                        for c in COINS) for t in tfs)
-    fast_new, mid_new, slow_new = any_new(FAST_TFS), any_new(MID_TFS), any_new(SLOW_TFS)
+    fast_new, mid_new = any_new(FAST_TFS), any_new(MID_TFS)
+    six_new, slow_new = any_new(SIX_TFS), any_new(SLOW_TFS)
     if fast_new:
         post(build_report(results, oi, FAST_TFS, "4h"), WH_FAST, dry)
     else:
@@ -470,10 +475,14 @@ def run_once(dry=False):
         post(build_report(results, oi, MID_TFS, "5h"), WH_MID, dry)
     else:
         log("  5h: nothing new -- not posting")
-    if slow_new:
-        post(build_report(results, oi, SLOW_TFS, "6h \u00b7 12h \u00b7 1d"), WH_SLOW, dry)
+    if six_new:
+        post(build_report(results, oi, SIX_TFS, "6h"), WH_6H, dry)
     else:
-        log("  6h/12h/1d: nothing new -- not posting")
+        log("  6h: nothing new -- not posting")
+    if slow_new:
+        post(build_report(results, oi, SLOW_TFS, "12h \u00b7 1d"), WH_SLOW, dry)
+    else:
+        log("  12h/1d: nothing new -- not posting")
     if not results:
         log("  nothing to report")
 
