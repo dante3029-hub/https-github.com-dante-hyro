@@ -1,3 +1,4 @@
+import os
 #!/usr/bin/env python3
 """
 ================================================================================
@@ -203,6 +204,27 @@ def _pivots(h, l, k):
         if h[i] == max(h[i-k:i+k+1]): ph[i+k] = h[i]
         if l[i] == min(l[i-k:i+k+1]): pl[i+k] = l[i]
     return ph, pl
+TAKER_DIR = os.path.expanduser("~/taker_data")
+
+
+def _load_taker(coin):
+    """Matched-venue delta from Binance futures. clean_panel's taker column is
+    Binance taker volume against Bybit price volume -- taker exceeded total
+    volume on 60% of bars, so `dn < 0` was unsatisfiable and BOS never fired."""
+    p = f"{TAKER_DIR}/{coin}_1h.csv"
+    if not os.path.exists(p):
+        return None
+    out = {}
+    with open(p) as f:
+        r = csv.reader(f); next(r, None)
+        for row in r:
+            try:
+                out[int(row[0])] = float(row[7])
+            except (ValueError, IndexError):
+                continue
+    return out or None
+
+
 def _load_4h(coin):
     ts=[];o=[];h=[];l=[];c=[];v=[];tb=[]
     with open(f"{HIST}/{coin}_1h.csv") as f:
@@ -220,8 +242,21 @@ def _load_4h(coin):
     agg = lambda x, how: {'f': x[:m*4].reshape(m,4)[:,0], 'x': x[:m*4].reshape(m,4)[:,-1],
                           'mx': x[:m*4].reshape(m,4).max(1), 'mn': x[:m*4].reshape(m,4).min(1),
                           's': x[:m*4].reshape(m,4).sum(1)}[how]
-    return (agg(A[0],'f'), agg(A[1],'f'), agg(A[2],'mx'), agg(A[3],'mn'),
-            agg(A[4],'x'), agg(A[5],'s'), agg(A[6],'s'))
+    # col 9 is taker_buy_base (always positive), NOT signed delta. Returning it
+    # raw meant run_bos()'s `dn < 0` confirmation could never be true, so the
+    # BOS sleeve produced zero weights on every live cycle. Signed delta is
+    # buys minus sells = 2*taker_buy - volume.
+    ts4 = agg(A[0],'f')
+    # Prefer matched-venue delta. clean_panel's taker column is another venue's
+    # volume, so any delta derived from it is meaningless.
+    tk = _load_taker(coin)
+    if tk:
+        dn4 = np.array([sum(tk.get(int(t) + h*3600000, 0.0) for h in range(4))
+                        for t in ts4])
+    else:
+        dn4 = 2*agg(A[6],'s') - agg(A[5],'s')
+    return (ts4, agg(A[1],'f'), agg(A[2],'mx'), agg(A[3],'mn'),
+            agg(A[4],'x'), agg(A[5],'s'), dn4)
 def run_bos(coins, calendar):
     """
     Market-structure SHORT, 4h bars. Trend state from confirmed swing pivots:

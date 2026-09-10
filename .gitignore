@@ -12,3 +12,4 @@ __pycache__/
 m5/
 m5_data.zip
 !strat8_returns.csv
+!taker_data/*.csv
