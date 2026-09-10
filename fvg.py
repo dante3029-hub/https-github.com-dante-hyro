@@ -22,7 +22,8 @@ def load(sym, tf):
     df=pd.read_csv(f'{PRICE}/{sym}_1h.csv')
     ts='open_time' if 'open_time' in df.columns else 'timestamp'
     df['ts']=pd.to_datetime(df[ts],unit='ms',utc=True).dt.tz_localize(None)
-    df=df.set_index('ts').sort_index(); r=f'{tf}h'
+    df=df.set_index('ts').sort_index()
+    r = f'{tf}h' if tf < 24 else '1D'
     return pd.DataFrame({'open':df['open'].resample(r).first(),'high':df['high'].resample(r).max(),
         'low':df['low'].resample(r).min(),'close':df['close'].resample(r).last(),
         'volume':df['volume'].resample(r).sum()}).dropna()
