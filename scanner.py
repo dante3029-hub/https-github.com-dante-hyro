@@ -42,15 +42,20 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 BYBIT = "https://api.bybit.com"
 WH_FAST = os.environ.get("DISCORD_WEBHOOK_FAST", os.environ.get("DISCORD_WEBHOOK", ""))
 WH_MID  = os.environ.get("DISCORD_WEBHOOK_MID", WH_FAST)
+WH_6H   = os.environ.get("DISCORD_WEBHOOK_6H", WH_FAST)
+WH_6H   = os.environ.get("DISCORD_WEBHOOK_6H", WH_FAST)
 WH_SLOW = os.environ.get("DISCORD_WEBHOOK_SLOW", WH_FAST)
 STATE = os.path.expanduser("~/scanner_state.json")
 
 # 4h and 5h closes only coincide at 00:00 and 20:00, so posting them together
 # meant one column was always stale. Separate channels give every post a column
 # that just closed. 6h/12h/1d nest cleanly so they stay together.
+# One channel per cadence: 6h fires 4x a day and would bury 12h (2x) and
+# daily (1x) if they shared a feed.
 FAST_TFS = [4]
 MID_TFS  = [5]
-SLOW_TFS = [6, 12, 24]
+SIX_TFS  = [6]
+SLOW_TFS = [12, 24]
 # The most recent signal is shown until a NEWER one replaces it -- mirroring the
 # indicator's own max_patterns=1 behaviour, where a drawn pattern stays on the
 # chart until the next one appears. NEW marks the bar it fired on; anything older
@@ -253,17 +258,18 @@ def scan_tf(coin, df, hours):
     div = ddetect(d)
 
     pat = pats[-1] if pats else None
+    det_bar = pat[7] if (pat and len(pat) > 7) else None
     dv = div[-1] if div else None
     cap = MAX_AGE_BARS.get(hours)
     if cap is not None:
-        if pat and last_bar - pat[0] > cap:
+        if pat and last_bar - (det_bar if det_bar is not None else pat[0]) > cap:
             pat = None
         if dv and last_bar - (dv["bar"] + 5) > cap:
             dv = None
     if pat is None and dv is None:
         return None, None
     if FRESH_BARS is not None:
-        if pat and last_bar - pat[0] > FRESH_BARS:
+        if pat and last_bar - (det_bar if det_bar is not None else pat[0]) > FRESH_BARS:
             pat = None
         if dv and last_bar - (dv["bar"] + 5) > FRESH_BARS:
             dv = None
@@ -273,10 +279,14 @@ def scan_tf(coin, df, hours):
     parts = []
     fresh = False
     age = None
+    just_confirmed = False      # divergence seen for the FIRST time this bar
     if pat:
-        b, ts, is_bull, name, entry, stop, target = pat
+        b, ts, is_bull, name, entry, stop, target = pat[:7]
         parts.append(CODE.get(name, name[:3]))
-        age = last_bar - b
+        # Age from DETECTION, not the break bar. break_idx scans up to 20 bars
+        # backward, so the break is typically 2-3 bars old and essentially never
+        # 0 -- which meant NEW could never appear on a pattern.
+        age = last_bar - (det_bar if det_bar is not None else b)
         if age == 0:
             fresh = True
     if dv:
@@ -290,8 +300,10 @@ def scan_tf(coin, df, hours):
         d_age = last_bar - dv["bar"]            # bars since the pivot itself
         if d_conf == 0:
             fresh = True                        # newly confirmed -> triggers a post
+            just_confirmed = True
         age = d_age if age is None else min(age, d_age)
     return " ".join(parts), dict(pat=pat, div=dv, fresh=fresh, tf=hours, age=age,
+                                 just_confirmed=just_confirmed,
                                  bar_time=str(d.index[last_bar]))
 
 
@@ -322,8 +334,11 @@ def build_report(results, oi, tfs, title):
             # NOTE: `elif det.get("age")` treated age 0 as falsy, so a pattern on
             # the current bar that had not set `fresh` printed with NO marker at
             # all. Age is now tested against None explicitly.
+            # NEW = first time this signal is visible. For a pattern that is
+            # age 0; for a divergence it is age 5, because a pivot cannot be
+            # confirmed until 5 bars after it forms. Both are "new to you".
             a = det.get("age")
-            if det.get("pat") and a == 0:
+            if (det.get("pat") and a == 0) or det.get("just_confirmed"):
                 x += " NEW"
             elif a is not None and a > 0:
                 x += f" {a}b"
@@ -411,7 +426,7 @@ def run_once(dry=False):
                 log(f"  [{i}/{len(COINS)}] {c}: no data")
                 continue
             hit = False
-            for t in FAST_TFS + MID_TFS + SLOW_TFS:
+            for t in FAST_TFS + MID_TFS + SIX_TFS + SLOW_TFS:
                 cell, det = scan_tf(c, df, t)
                 if cell:
                     results[(c, t)] = (cell, det)
@@ -420,7 +435,7 @@ def run_once(dry=False):
                 oi[c] = oi_state(c)
                 log(f"  [{i}/{len(COINS)}] {c}: "
                     + ", ".join(f"{t}h={results[(c,t)][0]}"
-                                for t in FAST_TFS+MID_TFS+SLOW_TFS if (c, t) in results))
+                                for t in FAST_TFS+MID_TFS+SIX_TFS+SLOW_TFS if (c, t) in results))
         except Exception as e:
             log(f"  [{i}/{len(COINS)}] {c}: {type(e).__name__}: {e}")
         time.sleep(0.1)
@@ -437,7 +452,7 @@ def run_once(dry=False):
     # every 5. The canonical last close is a pure function of the current time.
     now = dt.datetime.now(dt.timezone.utc).replace(minute=0, second=0, microsecond=0)
     epoch = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
-    for t in FAST_TFS + MID_TFS + SLOW_TFS:
+    for t in FAST_TFS + MID_TFS + SIX_TFS + SLOW_TFS:
         hrs = int((now - epoch).total_seconds() // 3600)
         last_close = epoch + dt.timedelta(hours=(hrs // t) * t)
         cur = last_close.isoformat()
@@ -448,10 +463,11 @@ def run_once(dry=False):
         save_state(st)
 
     def any_new(tfs):
-        return any(advanced[t] and
+        return any(advanced.get(t, False) and
                    any((results.get((c, t), (None, {}))[1] or {}).get("fresh")
                        for c in COINS) for t in tfs)
-    fast_new, mid_new, slow_new = any_new(FAST_TFS), any_new(MID_TFS), any_new(SLOW_TFS)
+    fast_new, mid_new = any_new(FAST_TFS), any_new(MID_TFS)
+    six_new, slow_new = any_new(SIX_TFS), any_new(SLOW_TFS)
     if fast_new:
         post(build_report(results, oi, FAST_TFS, "4h"), WH_FAST, dry)
     else:
@@ -460,10 +476,14 @@ def run_once(dry=False):
         post(build_report(results, oi, MID_TFS, "5h"), WH_MID, dry)
     else:
         log("  5h: nothing new -- not posting")
-    if slow_new:
-        post(build_report(results, oi, SLOW_TFS, "6h \u00b7 12h \u00b7 1d"), WH_SLOW, dry)
+    if six_new:
+        post(build_report(results, oi, SIX_TFS, "6h"), WH_6H, dry)
     else:
-        log("  6h/12h/1d: nothing new -- not posting")
+        log("  6h: nothing new -- not posting")
+    if slow_new:
+        post(build_report(results, oi, SLOW_TFS, "12h \u00b7 1d"), WH_SLOW, dry)
+    else:
+        log("  12h/1d: nothing new -- not posting")
     if not results:
         log("  nothing to report")
 
