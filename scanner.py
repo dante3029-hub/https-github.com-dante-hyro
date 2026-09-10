@@ -452,7 +452,7 @@ def run_once(dry=False):
     # every 5. The canonical last close is a pure function of the current time.
     now = dt.datetime.now(dt.timezone.utc).replace(minute=0, second=0, microsecond=0)
     epoch = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
-    for t in FAST_TFS + MID_TFS + SLOW_TFS:
+    for t in FAST_TFS + MID_TFS + SIX_TFS + SLOW_TFS:
         hrs = int((now - epoch).total_seconds() // 3600)
         last_close = epoch + dt.timedelta(hours=(hrs // t) * t)
         cur = last_close.isoformat()
@@ -463,7 +463,7 @@ def run_once(dry=False):
         save_state(st)
 
     def any_new(tfs):
-        return any(advanced[t] and
+        return any(advanced.get(t, False) and
                    any((results.get((c, t), (None, {}))[1] or {}).get("fresh")
                        for c in COINS) for t in tfs)
     fast_new, mid_new = any_new(FAST_TFS), any_new(MID_TFS)
