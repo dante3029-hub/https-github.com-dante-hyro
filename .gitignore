@@ -14,3 +14,4 @@ m5_data.zip
 !strat8_returns.csv
 !taker_data/*.csv
 !funding_data/*.csv
+!strat8_confirm.csv
