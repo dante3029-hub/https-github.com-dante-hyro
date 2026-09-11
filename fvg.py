@@ -15,6 +15,7 @@ Four tradeable readings, all tested:
 import os, glob, sys
 import numpy as np, pandas as pd
 FEE, CAP, MAX_HOLD, ATR_STOP = 0.00085, 0.15, 15, 2.0
+TP_ATR = None   # take-profit in ATR, None = none
 PRICE='/tmp/hyro/price_data'; OIDIR='/tmp/hyro/oi_data'
 SYMS = sorted({os.path.basename(f).replace('_1h.csv','') for f in glob.glob(f'{PRICE}/*_1h.csv')})
 
@@ -97,9 +98,13 @@ def run(tf, mode, thr=0.0, auto=False, oi_filter=False, shuffle=False, seed=0,
                 if not (len(v) and bool(v.iloc[0])): continue
             if shuffle: side=int(rng_.choice([-1,1]))
             ent=o[eb]; stop=ent-side*ATR_STOP*A[eb]; r=None
+            tp = None if TP_ATR is None else ent + side*TP_ATR*A[eb]
             for j in range(eb+1,min(eb+1+MAX_HOLD,n)):
                 if side>0 and lo[j]<=stop: r=(stop-ent)/ent-2*FEE; break
                 if side<0 and hi[j]>=stop: r=(ent-stop)/ent-2*FEE; break
+                if tp is not None:
+                    if side>0 and hi[j]>=tp: r=(tp-ent)/ent-2*FEE; break
+                    if side<0 and lo[j]<=tp: r=(ent-tp)/ent-2*FEE; break
             if r is None:
                 j=min(eb+MAX_HOLD,n-1); r=side*(c[j]-ent)/ent-2*FEE
             if not np.isfinite(r): continue

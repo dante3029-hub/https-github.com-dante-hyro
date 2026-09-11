@@ -33,6 +33,7 @@ def stats(x):
     return (float(x.mean()/x.std()*np.sqrt(365)), float(x.mean()*365*100), float((eq.cummax()-eq).max()*100))
 
 FEE, CAP, MAX_HOLD, ATR_STOP = 0.00085, 0.15, 15, 2.0
+TP_ATR = None   # take-profit in ATR, None = none
 LOOKBACK, VOL_LEN, BOX_W = 20, 2, 1.0
 SYMS = sorted({os.path.basename(f).replace('_1h.csv','') for f in glob.glob('/tmp/hyro/price_data/*_1h.csv')})
 
@@ -125,9 +126,13 @@ def run(tf, which, oi_filter=False, shuffle=False, seed=0):
                 if not (len(v) and bool(v.iloc[0])): continue
             if shuffle: side=int(rng.choice([-1,1]))
             ent=o[eb]; stop=ent-side*ATR_STOP*A[i]; r=None
+            tp = None if TP_ATR is None else ent + side*TP_ATR*A[eb]
             for j in range(eb+1,min(eb+1+MAX_HOLD,n)):
                 if side>0 and lo[j]<=stop: r=(stop-ent)/ent-2*FEE; break
                 if side<0 and hi[j]>=stop: r=(ent-stop)/ent-2*FEE; break
+                if tp is not None:
+                    if side>0 and hi[j]>=tp: r=(tp-ent)/ent-2*FEE; break
+                    if side<0 and lo[j]<=tp: r=(ent-tp)/ent-2*FEE; break
             if r is None:
                 j=min(eb+MAX_HOLD,n-1); r=side*(c[j]-ent)/ent-2*FEE
             if not np.isfinite(r): continue
