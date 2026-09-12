@@ -72,7 +72,21 @@ def get(url, tries=3):
     return []
 
 
+# The scanner's 60-coin universe. Backtests so far used only the 24 in
+# clean_panel; this widens them to match what the live scanner watches.
+SCANNER_COINS = [
+    "AAVE","ADA","AIXBT","ALGO","APT","ARB","ASTER","ATOM","AVAX","BCH","BNB",
+    "BONK","BTC","CRV","DOGE","DOT","ETC","ETH","FARTCOIN","FIL","FLOKI",
+    "GRASS","HBAR","HYPE","INJ","JTO","JUP","KAITO","LDO","LINK","LIT","LTC",
+    "MOODENG","NEAR","ONDO","OP","ORDI","PENGU","PEPE","PNUT","POL","POPCAT",
+    "PUMP","RENDER","S","SHIB","SOL","STX","SUI","TAO","TIA","TRUMP","TRX",
+    "UNI","VIRTUAL","WIF","WLD","XPL","XRP","ZEC",
+]
+
+
 def coins():
+    if "--scanner" in sys.argv:
+        return sorted(c for c in SCANNER_COINS if c != "BTC")
     names = {os.path.basename(f).replace("_1h.csv", "")
              for f in glob.glob(f"{SRC}/*_1h.csv")}
     return sorted(n for n in names if n != "BTC")
