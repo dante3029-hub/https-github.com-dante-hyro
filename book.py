@@ -10,7 +10,13 @@ import os, glob
 import numpy as np, pandas as pd
 TAKER='/tmp/hyro/taker_data'
 FEE, CAP = 0.00085, 0.15
-SYMS = sorted({os.path.basename(f).replace('_1h.csv','') for f in glob.glob(f'{TAKER}/*_1h.csv')})
+# PIN THE UNIVERSE. Globbing taker_data/ meant that when the 60-coin fetch was
+# pushed, book.py silently switched from 24 coins to 60 -- and skew went from
+# +0.88 to -0.16 without anyone changing a line of strategy code.
+CORE24 = ['1000PEPE','1000RATS','1000SHIB','AAVE','ADA','AVAX','BCH','BNB','DOGE',
+          'DOT','ETH','FIL','LDO','LINK','LTC','NEAR','SOL','SUI','TRX','UNI',
+          'WLD','XLM','XRP','ZEC']
+SYMS = [c for c in CORE24 if os.path.exists(f'{TAKER}/{c}_1h.csv')]
 
 def load_daily(sym):
     df=pd.read_csv(f'{TAKER}/{sym}_1h.csv')
