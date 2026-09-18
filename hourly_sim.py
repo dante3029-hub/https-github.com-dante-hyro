@@ -76,9 +76,15 @@ def oi_up(sym, tf):
     return (od - od.shift(1)) > 0
 
 
-def positions_to_hourly(trades, hidx, coins, per_position=1.0):
+def positions_to_hourly(trades, hidx, coins, per_position=1.0, max_gross=None):
     """trades: (coin, entry_ts, exit_ts, side). Held on the hourly grid between
-    the two timestamps, at each sleeve's own position size."""
+    the two timestamps, at each sleeve's own position size.
+
+    max_gross: scale the sleeve down on any hour where it exceeds this gross.
+    WITHOUT it, per_position=1/6 does NOT cap concurrency -- FVG ran at a mean
+    of 12.5 simultaneous positions, i.e. 2.1x levered. Capping it raised its
+    Sharpe 3.29 -> 3.49 and cut max drawdown 91% -> 28%.
+    """
     W = pd.DataFrame(0.0, index=hidx, columns=coins)
     arr = {c: np.zeros(len(hidx)) for c in coins}
     for coin, t0, t1, side in trades:
@@ -92,6 +98,10 @@ def positions_to_hourly(trades, hidx, coins, per_position=1.0):
         arr[coin][lo:hi] += side * per_position
     for c in coins:
         W[c] = arr[c]
+    if max_gross is not None:
+        gr = W.abs().sum(axis=1)
+        sc = (max_gross / gr.replace(0, np.nan)).clip(upper=1.0).fillna(1.0)
+        W = W.mul(sc, axis=0)
     return W
 
 
@@ -217,7 +227,7 @@ def sr_hourly(syms, hidx, coins, tf=6, stop_atr=3.0, hold=15):
                     ex = j
                     break
             tr.append((s, d.index[eb], d.index[ex], 1))
-    return positions_to_hourly(tr, hidx, coins, per_position=1.0/6), len(tr)
+    return positions_to_hourly(tr, hidx, coins, per_position=1.0/6, max_gross=1.0), len(tr)
 
 
 def fvg_hourly(syms, hidx, coins, tf=12, stop_atr=1.0, hold=10):
@@ -253,7 +263,7 @@ def fvg_hourly(syms, hidx, coins, tf=12, stop_atr=1.0, hold=10):
                     ex = j
                     break
             tr.append((s, d.index[eb], d.index[ex], side))
-    return positions_to_hourly(tr, hidx, coins, per_position=1.0/6), len(tr)
+    return positions_to_hourly(tr, hidx, coins, per_position=1.0/6, max_gross=1.0), len(tr)
 
 
 def bos_hourly(syms, hidx, coins, tf=8, hold=30):
@@ -301,7 +311,7 @@ def bos_hourly(syms, hidx, coins, tf=8, hold=30):
                 tr.append((s, d.index[eb], d.index[ex], -1))
                 i = eb + hold
             i += 1
-    return positions_to_hourly(tr, hidx, coins, per_position=1.0/6), len(tr)
+    return positions_to_hourly(tr, hidx, coins, per_position=1.0/6, max_gross=1.0), len(tr)
 
 
 def breakout_hourly(syms, hidx, coins, lookback=50, stop_atr=3.0, hold=20):
@@ -335,4 +345,91 @@ def breakout_hourly(syms, hidx, coins, lookback=50, stop_atr=3.0, hold=20):
                     break
             tr.append((s, d.index[eb], d.index[ex], 1))
             i = eb + hold
-    return positions_to_hourly(tr, hidx, coins, per_position=1.0/6), len(tr)
+    return positions_to_hourly(tr, hidx, coins, per_position=1.0/6, max_gross=1.0), len(tr)
+
+
+def cascade_hourly(syms, hidx, coins, z_thr=-2.5, hold=3, n_long=5):
+    """Cascade as an EVENT sleeve with explicit entry/exit timestamps.
+
+    Previously built inline by writing a weight per daily bar and forward-filling
+    onto the hourly grid. That is fragile -- if the reset logic misfires the
+    ffill holds a position indefinitely. Emitting (coin, entry, exit) trades and
+    reusing positions_to_hourly makes the hold length explicit and testable.
+    """
+    d = {}
+    for s in syms:
+        if os.path.exists(f'{TAKER}/{s}_1h.csv'):
+            b = bars(s, 24)
+            if len(b) >= 200:
+                d[s] = b
+    didx = None
+    for v in d.values():
+        didx = v.index if didx is None else didx.union(v.index)
+    cs = [c for c in sorted(d) if c in coins]
+    PXd = pd.DataFrame({c: d[c]['close'].reindex(didx) for c in cs})
+    Rd = PXd.pct_change()
+    mkt = Rd.mean(axis=1)
+    tr = []
+    t = 60
+    while t < len(didx) - hold - 1:
+        v = mkt.iloc[t-20:t].std()
+        if v > 0 and mkt.iloc[t]/v <= z_thr:
+            worst = Rd.iloc[t].dropna().sort_values().index[:n_long]
+            ex = min(t + hold, len(didx) - 1)
+            for c in worst:
+                tr.append((c, didx[t+1], didx[ex], 1))
+            t += hold          # no overlapping cascades
+        t += 1
+    return positions_to_hourly(tr, hidx, coins,
+                               per_position=1.0/max(n_long, 1),
+                               max_gross=1.0), len(tr)
+
+
+def pattern_hourly(syms, hidx, coins, tf=6, stop_atr=2.0, hold=15,
+                   bull_only=True, use_oi=True):
+    """MarkitTick 16-pattern sleeve on its native 6h grid.
+
+    Tested standalone at 1.03 (6h, bullish only, +OI filter) but never made it
+    into the book. Entry at the open of the bar AFTER detection -- NOT the
+    historical break bar, which is up to 20 bars in the past and would be
+    lookahead (that error inflated an early backtest from 1.04 to 6.06).
+    """
+    from markittick_detector import detect
+    tr = []
+    for s in syms:
+        if not os.path.exists(f'{TAKER}/{s}_1h.csv'):
+            continue
+        try:
+            d = bars(s, tf)
+        except Exception:
+            continue
+        if len(d) < 700:
+            continue
+        ou = oi_up(s, tf) if use_oi else None
+        if use_oi and ou is None:
+            continue
+        A = atr(d).values
+        o, h, l, c = (d['open'].values, d['high'].values,
+                      d['low'].values, d['close'].values)
+        n = len(d)
+        for rec in detect(d):
+            b, ts, is_bull, name, entry, stop, target = rec[:7]
+            det_bar = rec[7] if len(rec) > 7 else b
+            if bull_only and not is_bull:
+                continue
+            eb = det_bar + 1
+            if eb >= n - 1 or not np.isfinite(A[eb]) or A[eb] <= 0:
+                continue
+            if use_oi:
+                v = ou.reindex([d.index[eb]], method='ffill')
+                if not (len(v) and bool(v.iloc[0])):
+                    continue
+            side = 1 if is_bull else -1
+            stp = o[eb] - side*stop_atr*A[eb]
+            ex = min(eb + hold, n - 1)
+            for j in range(eb + 1, min(eb + 1 + hold, n)):
+                if (side > 0 and l[j] <= stp) or (side < 0 and h[j] >= stp):
+                    ex = j
+                    break
+            tr.append((s, d.index[eb], d.index[ex], side))
+    return positions_to_hourly(tr, hidx, coins, per_position=1.0/6, max_gross=1.0), len(tr)
