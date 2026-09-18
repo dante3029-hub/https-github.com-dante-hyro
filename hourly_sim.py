@@ -433,3 +433,50 @@ def pattern_hourly(syms, hidx, coins, tf=6, stop_atr=2.0, hold=15,
                     break
             tr.append((s, d.index[eb], d.index[ex], side))
     return positions_to_hourly(tr, hidx, coins, per_position=1.0/6, max_gross=1.0), len(tr)
+
+
+def srflip_hourly(syms, hidx, coins, tf=6, stop_atr=3.0, hold=15, window=20):
+    """S/R FLIP: after price breaks resistance, buy when it returns to that
+    level and holds. The level flips from resistance to support -- `res_is_sup`
+    in the ChartPrime source, which I had never tested.
+
+    Different trigger from sr_hourly (which buys the BREAK). This buys the
+    RETEST, so it enters on weakness rather than strength.
+    """
+    import sr2
+    tr = []
+    for s in syms:
+        if not os.path.exists(f'{TAKER}/{s}_1h.csv'):
+            continue
+        try:
+            d = bars(s, tf)
+        except Exception:
+            continue
+        if len(d) < 400:
+            continue
+        sup, sup1, res, res1 = sr2.levels(d)
+        A = atr(d).values
+        o, h, l, c = (d['open'].values, d['high'].values,
+                      d['low'].values, d['close'].values)
+        n = len(d)
+        broke = None
+        lvl = np.nan
+        for i in range(1, n - hold - 2):
+            if np.isfinite(res1[i]) and c[i] > res1[i] and c[i-1] <= res1[i-1]:
+                broke, lvl = i, res[i]
+            if (broke is not None and i > broke and i - broke <= window
+                    and np.isfinite(lvl) and l[i] <= lvl and c[i] > lvl
+                    and np.isfinite(A[i]) and A[i] > 0):
+                eb = i + 1
+                if eb >= n - 1:
+                    break
+                stp = o[eb] - stop_atr*A[i]
+                ex = min(eb + hold, n - 1)
+                for j in range(eb + 1, min(eb + 1 + hold, n)):
+                    if l[j] <= stp:
+                        ex = j
+                        break
+                tr.append((s, d.index[eb], d.index[ex], 1))
+                broke = None
+    return positions_to_hourly(tr, hidx, coins, per_position=1.0/6,
+                               max_gross=1.0), len(tr)
