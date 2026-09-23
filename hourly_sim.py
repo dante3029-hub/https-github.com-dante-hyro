@@ -209,7 +209,7 @@ def sr_hourly(syms, hidx, coins, tf=6, stop_atr=3.0, hold=15):
         sr2.SYMS = [s]
         L, S = sr2.signals(d, 'break_res')
         A = atr(d).values
-        lo, c = d['low'].values, d['close'].values
+        o, lo, c = d['open'].values, d['low'].values, d['close'].values
         n = len(d)
         for i in range(n - hold - 2):
             if not L[i]:
@@ -220,7 +220,8 @@ def sr_hourly(syms, hidx, coins, tf=6, stop_atr=3.0, hold=15):
             v = ou.reindex([d.index[eb]], method='ffill')
             if not (len(v) and bool(v.iloc[0])):
                 continue
-            stp = c[eb] - stop_atr*A[i]
+            # entry is at o[eb]; c[eb] is not known until that bar closes.
+            stp = o[eb] - stop_atr*A[i]
             ex = min(eb + hold, n - 1)
             for j in range(eb + 1, min(eb + 1 + hold, n)):
                 if lo[j] <= stp:
@@ -246,7 +247,8 @@ def fvg_hourly(syms, hidx, coins, tf=12, stop_atr=1.0, hold=10):
         if ou is None:
             continue
         A = atr(d).values
-        lo, hi, c = d['low'].values, d['high'].values, d['close'].values
+        o, lo, hi, c = (d['open'].values, d['low'].values,
+                        d['high'].values, d['close'].values)
         n = len(d)
         for (i, is_bull, gmax, gmin) in FV.fvgs(d, 0.0, False):
             eb = i + 1
@@ -256,7 +258,9 @@ def fvg_hourly(syms, hidx, coins, tf=12, stop_atr=1.0, hold=10):
             if not (len(v) and bool(v.iloc[0])):
                 continue
             side = 1 if is_bull else -1
-            stp = c[eb] - side*stop_atr*A[eb]
+            # was c[eb] and A[eb] -- both include the entry bar, which is
+            # lookahead when entering at its OPEN.
+            stp = o[eb] - side*stop_atr*A[i]
             ex = min(eb + hold, n - 1)
             for j in range(eb + 1, min(eb + 1 + hold, n)):
                 if (side > 0 and lo[j] <= stp) or (side < 0 and hi[j] >= stp):
@@ -425,7 +429,7 @@ def pattern_hourly(syms, hidx, coins, tf=6, stop_atr=2.0, hold=15,
                 if not (len(v) and bool(v.iloc[0])):
                     continue
             side = 1 if is_bull else -1
-            stp = o[eb] - side*stop_atr*A[eb]
+            stp = o[eb] - side*stop_atr*A[eb - 1]   # A[eb] includes the entry bar
             ex = min(eb + hold, n - 1)
             for j in range(eb + 1, min(eb + 1 + hold, n)):
                 if (side > 0 and l[j] <= stp) or (side < 0 and h[j] >= stp):
@@ -462,7 +466,10 @@ def srflip_hourly(syms, hidx, coins, tf=6, stop_atr=3.0, hold=15, window=20):
         broke = None
         lvl = np.nan
         for i in range(1, n - hold - 2):
-            if np.isfinite(res1[i]) and c[i] > res1[i] and c[i-1] <= res1[i-1]:
+            # source: brekout_res := ta.crossover(LOW, resistanceLevel_1).
+            # Was c[i] (close) -- the deviation fixed in sleeve_sr.py but
+            # left here. The whole candle must clear the box.
+            if np.isfinite(res1[i]) and l[i] > res1[i] and l[i-1] <= res1[i-1]:
                 broke, lvl = i, res[i]
             if (broke is not None and i > broke and i - broke <= window
                     and np.isfinite(lvl) and l[i] <= lvl and c[i] > lvl
