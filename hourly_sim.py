@@ -76,7 +76,8 @@ def oi_up(sym, tf):
     return (od - od.shift(1)) > 0
 
 
-def positions_to_hourly(trades, hidx, coins, per_position=1.0, max_gross=None):
+def positions_to_hourly(trades, hidx, coins, per_position=1.0, max_gross=None,
+                        max_per_coin=None):
     """trades: (coin, entry_ts, exit_ts, side). Held on the hourly grid between
     the two timestamps, at each sleeve's own position size.
 
@@ -98,6 +99,12 @@ def positions_to_hourly(trades, hidx, coins, per_position=1.0, max_gross=None):
         arr[coin][lo:hi] += side * per_position
     for c in coins:
         W[c] = arr[c]
+    if max_per_coin is not None:
+        # max_gross caps the sleeve's TOTAL exposure but NOT per coin. Without
+        # this, 4 of S/R's 6 slots could sit in one coin (5,304 coin-hours) and
+        # FVG had 3 slots in one coin across 16,525 coin-hours. That is the
+        # concentration risk the original audit flagged on the old bot.
+        W = W.clip(-max_per_coin, max_per_coin)
     if max_gross is not None:
         gr = W.abs().sum(axis=1)
         sc = (max_gross / gr.replace(0, np.nan)).clip(upper=1.0).fillna(1.0)
