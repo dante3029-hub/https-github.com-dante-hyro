@@ -223,7 +223,7 @@ def sr_hourly(syms, hidx, coins, tf=6, stop_atr=3.0, hold=15):
             # entry is at o[eb]; c[eb] is not known until that bar closes.
             stp = o[eb] - stop_atr*A[i]
             ex = min(eb + hold, n - 1)
-            for j in range(eb + 1, min(eb + 1 + hold, n)):
+            for j in range(eb, min(eb + 1 + hold, n)):
                 if lo[j] <= stp:
                     ex = j
                     break
@@ -262,7 +262,7 @@ def fvg_hourly(syms, hidx, coins, tf=12, stop_atr=1.0, hold=10):
             # lookahead when entering at its OPEN.
             stp = o[eb] - side*stop_atr*A[i]
             ex = min(eb + hold, n - 1)
-            for j in range(eb + 1, min(eb + 1 + hold, n)):
+            for j in range(eb, min(eb + 1 + hold, n)):
                 if (side > 0 and lo[j] <= stp) or (side < 0 and hi[j] >= stp):
                     ex = j
                     break
@@ -343,7 +343,7 @@ def breakout_hourly(syms, hidx, coins, lookback=50, stop_atr=3.0, hold=20):
                 break
             stp = o[eb] - stop_atr*A[i]
             ex = min(eb + hold, n - 1)
-            for j in range(eb + 1, min(eb + 1 + hold, n)):
+            for j in range(eb, min(eb + 1 + hold, n)):
                 if l[j] <= stp:
                     ex = j
                     break
@@ -431,7 +431,7 @@ def pattern_hourly(syms, hidx, coins, tf=6, stop_atr=2.0, hold=15,
             side = 1 if is_bull else -1
             stp = o[eb] - side*stop_atr*A[eb - 1]   # A[eb] includes the entry bar
             ex = min(eb + hold, n - 1)
-            for j in range(eb + 1, min(eb + 1 + hold, n)):
+            for j in range(eb, min(eb + 1 + hold, n)):
                 if (side > 0 and l[j] <= stp) or (side < 0 and h[j] >= stp):
                     ex = j
                     break
@@ -479,7 +479,7 @@ def srflip_hourly(syms, hidx, coins, tf=6, stop_atr=3.0, hold=15, window=20):
                     break
                 stp = o[eb] - stop_atr*A[i]
                 ex = min(eb + hold, n - 1)
-                for j in range(eb + 1, min(eb + 1 + hold, n)):
+                for j in range(eb, min(eb + 1 + hold, n)):
                     if l[j] <= stp:
                         ex = j
                         break

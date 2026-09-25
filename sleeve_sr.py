@@ -234,7 +234,8 @@ def backtest(df: pd.DataFrame, oi_up: Optional[pd.Series] = None,
         stp = ent - stop_atr*a
         ex = min(eb + hold, P['n'] - 1)
         px = c[ex]
-        for j in range(eb + 1, min(eb + 1 + hold, P['n'])):
+        # include the entry bar -- a stop can be hit the moment you are in
+        for j in range(eb, min(eb + 1 + hold, P['n'])):
             if l[j] <= stp:
                 ex, px = j, stp
                 break
