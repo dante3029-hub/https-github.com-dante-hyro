@@ -494,3 +494,138 @@ def srflip_hourly(syms, hidx, coins, tf=6, stop_atr=3.0, hold=15, window=20):
                 broke = None
     return positions_to_hourly(tr, hidx, coins, per_position=1.0/6,
                                max_gross=1.0), len(tr)
+
+
+BTCP = '/tmp/hyro/btc_pairs'
+_UNPREFIX = {'1000PEPE': 'PEPE', '1000SHIB': 'SHIB', '1000RATS': 'RATS',
+             '1000BONK': 'BONK', '1000FLOKI': 'FLOKI'}
+
+
+def btc_pair_bars(coin, tf=6):
+    """Real BTC-denominated bars from Binance spot -- own order book, own
+    volume. NOT a constructed ratio: S/R builds its levels from
+    candle-direction volume, and the real market's volume is information the
+    division ALTUSDT/BTCUSDT cannot reproduce (1.89 real vs 1.17 constructed)."""
+    p = f"{BTCP}/{_UNPREFIX.get(coin, coin)}BTC_1h.csv"
+    if not os.path.exists(p):
+        return None
+    df = pd.read_csv(p)
+    df['ts'] = pd.to_datetime(df['open_time'], unit='ms')
+    df = df.set_index('ts').sort_index()
+    r = f'{tf}h'
+    return pd.DataFrame({
+        'open': df['open'].resample(r).first(),
+        'high': df['high'].resample(r).max(),
+        'low': df['low'].resample(r).min(),
+        'close': df['close'].resample(r).last(),
+        'volume': df['volume'].resample(r).sum(),
+    }).dropna()
+
+
+def srbtc_hourly(syms, hidx, coins, tf=6, stop_atr=2.5, hold=15):
+    """S/R detected on the BTC-PAIR chart, traded on the USDT perp.
+
+    A resistance break on SOLBTC means SOL is breaking out against the market
+    leader -- relative strength, which leads the USD move in a rising market.
+    Bull half 2.36 vs the USDT chart's 1.96.
+
+    Only ~21 of CORE24 have a live BTC pair on Binance spot; the rest are
+    skipped rather than approximated.
+    """
+    import sr2
+    tr = []
+    for s in syms:
+        if not os.path.exists(f'{TAKER}/{s}_1h.csv'):
+            continue
+        usd = bars(s, tf)
+        sig = btc_pair_bars(s, tf)
+        if sig is None or len(usd) < 400:
+            continue
+        sig = sig.reindex(usd.index).ffill().dropna()
+        if len(sig) < 400:
+            continue
+        L, S = sr2.signals(sig, 'break_res')
+        A = atr(usd).to_numpy()
+        o, l = usd['open'].to_numpy(), usd['low'].to_numpy()
+        n = len(usd)
+        for i in range(min(len(L), n) - hold - 2):
+            if not L[i]:
+                continue
+            eb = i + 1
+            if eb >= n - 1 or not np.isfinite(A[i]) or A[i] <= 0:
+                continue
+            stp = o[eb] - stop_atr*A[i]
+            ex = min(eb + hold, n - 1)
+            for j in range(eb, min(eb + 1 + hold, n)):
+                if l[j] <= stp:
+                    ex = j
+                    break
+            tr.append((s, usd.index[eb], usd.index[ex], 1))
+    return positions_to_hourly(tr, hidx, coins, per_position=1.0/6,
+                               max_gross=1.0, max_per_coin=1.0/6), len(tr)
+
+
+def oi_rank_hourly(syms, hidx, coins, lookbacks=(3, 5, 7, 10, 14), n=5, hold=3):
+    """Cross-sectional rank on OPEN INTEREST change -- long the biggest
+    expansion, short the biggest contraction.
+
+    The only sleeve reading something other than price or volume. OI is
+    POSITIONING: where traders are opening new exposure. That is why it
+    correlates -0.05 to 0.31 with the rest of the book.
+
+    LOOKBACK BLEND, not a single value. 7d alone scored 1.41 against ~0.95 at
+    5d and 10d -- a 45% spike, the signature of a fitted parameter. Averaging
+    the RANK across five lookbacks costs 0.07 in the book (4.20 -> 4.13) and
+    removes that dependence. The wider blend beats the narrow one, which is
+    what a real effect does.
+
+    Validation: random-selection control on the same bars and turnover scored
+    -1.83 / -1.88 / -1.45 against the real 1.34 -- a gap of +2.78 to +3.22.
+    """
+    dd, oi = {}, {}
+    for s in syms:
+        p = f'{TAKER}/{s}_1h.csv'
+        if not os.path.exists(p):
+            continue
+        b = bars(s, 24)
+        if len(b) < 400:
+            continue
+        dd[s] = b
+        q = f'{OIDIR}/{s}_oi_1h.csv'
+        if os.path.exists(q):
+            x = pd.read_csv(q)
+            x['ts'] = pd.to_datetime(x['timestamp'], unit='ms')
+            oi[s] = x.set_index('ts').sort_index()['open_interest'].resample('1D').last()
+    if not oi:
+        return pd.DataFrame(0.0, index=hidx, columns=coins), 0
+    didx = None
+    for v in dd.values():
+        didx = v.index if didx is None else didx.union(v.index)
+    cs = sorted(dd)
+    OI = pd.DataFrame({c: (oi[c].reindex(didx) if c in oi
+                           else pd.Series(np.nan, index=didx)) for c in cs})
+    acc = pd.DataFrame(0.0, index=didx, columns=cs)
+    for ph in range(hold):
+        cur = pd.Series(0.0, index=cs)
+        for t in range(max(70, max(lookbacks) + 2), len(didx)):
+            if (t - ph) % hold == 0:
+                ranks = []
+                for k in lookbacks:
+                    s = (OI.iloc[t] / OI.iloc[t-k] - 1).dropna()
+                    if len(s) >= 2*n + 2:
+                        ranks.append(s.rank(pct=True))
+                if ranks:
+                    avg = pd.concat(ranks, axis=1).mean(axis=1).dropna()
+                    if len(avg) >= 2*n + 2:
+                        o = avg.sort_values()
+                        cur = pd.Series(0.0, index=cs)
+                        cur[o.index[-n:]] = 0.5/n
+                        cur[o.index[:n]] = -0.5/n
+            acc.iloc[t] = cur.values
+    acc /= hold
+    W = pd.DataFrame(0.0, index=hidx, columns=coins)
+    a = acc.reindex(hidx, method='ffill').fillna(0.0)
+    for c in cs:
+        if c in coins:
+            W[c] = a[c].values
+    return W, len(cs)
