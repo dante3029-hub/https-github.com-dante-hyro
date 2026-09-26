@@ -343,9 +343,20 @@ def build_report(results, oi, tfs, title):
             elif a is not None and a > 0:
                 x += f" {a}b"
             out.append(x)
-        rows.append((c, out))
+        # freshest first -- a pattern is detected on the exact bar roughly once
+        # every 25-30 bars per coin, so NEW rows are rare and get buried
+        # otherwise. Sort by the youngest signal on the row.
+        best = None
+        for t in tfs:
+            det = results.get((c, t), (None, {}))[1] or {}
+            a = det.get("age")
+            if a is not None:
+                best = a if best is None else min(best, a)
+        rows.append((best if best is not None else 999, c, out))
     if not rows:
         return None
+    rows.sort(key=lambda r: r[0])
+    rows = [(c, out) for _, c, out in rows]
     when = dt.datetime.now(dt.timezone.utc).strftime("%d %b %H:%M UTC")
     L = [f"**PATTERN SCAN \u00b7 {title} \u00b7 {when}**",
          f"{len(rows)} of {len(COINS)} coins", "```",
