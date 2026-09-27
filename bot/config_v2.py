@@ -131,6 +131,7 @@ UNIVERSE_BY_SLEEVE = {
 #     $5,000    -$5k        0.00%      0.26%   98.9%       4
 #
 # Raising a kill switch is a risk decision. Flagged, not changed.
+# superseded by KILL_SWITCH_DOLLARS_V2 below
 KILL_SWITCH_DOLLARS_SUGGESTED = -5_000.0
 
 # 2) MAX_SLEEVE_MULTIPLIER = 1e9 (effectively uncapped) was set for the
@@ -154,8 +155,37 @@ KILL_SWITCH_DOLLARS_SUGGESTED = -5_000.0
 # The floor is barely a risk from $214k. The $10k DAILY limit is what binds,
 # and past $4,000/day it dominates -- which is exactly what the kill switch
 # above is for.
-TARGET_DAILY_VOL_DOLLARS = 5_000.0     # requires the -$5k kill switch
-TARGET_DAILY_VOL_CONSERVATIVE = 3_000.0  # safe without it
+# ── SIZING PLAN, validated on every start date of 1,315 realised days ──
+#
+#   $7,000/day, kill switch at -$5,000 intraday, DE-GEAR to $3,000 if equity
+#   touches $210,000.
+#
+# The de-gear is not optional -- it is what makes the size safe:
+#
+#   big size  trigger   passed   failed   median days   worst equity
+#   $7,000     $210k     99.9%    0.0%         5          $184,967
+#   $7,000     none      99.2%    0.7%         5          $177,155  <- BREACH
+#   $5,000     $210k     99.9%    0.0%         7          $186,215
+#   $3,000     flat      99.8%    0.0%        11          $189,377
+#
+# $210k is the right trigger: cutting later ($205k, $200k) lets more damage
+# accumulate first and gives a WORSE worst-case in every row.
+#
+# Why so fast: only +$6,000 is needed from $214,000. At $7,000/day that is
+# under one day of expected return, so the median is 5 days including noise.
+#
+# CAVEAT: in-sample. Same data the strategy was built on.
+TARGET_DAILY_VOL_DOLLARS = 7_000.0
+DEGEAR_TRIGGER_EQUITY = 210_000.0
+DEGEAR_DAILY_VOL_DOLLARS = 3_000.0
+KILL_SWITCH_DOLLARS_V2 = -5_000.0      # intraday, from the day's OPEN
+
+
+def daily_vol_target(equity: float) -> float:
+    """Size for the current equity. Checked BEFORE each rebalance, not once a
+    day -- the trigger is only protective if it fires promptly."""
+    return (DEGEAR_DAILY_VOL_DOLLARS if equity <= DEGEAR_TRIGGER_EQUITY
+            else TARGET_DAILY_VOL_DOLLARS)
 
 # ════════════════════════════════════════════════════════════════════════
 # health check — refuse to trade on CRITICAL
