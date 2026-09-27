@@ -60,8 +60,11 @@ def skew_scores(R: np.ndarray, t: int, lookback: int = LOOKBACK_DAYS) -> np.ndar
         col = win[:, c]
         col = col[~np.isnan(col)]
         k = col.size
-        # need a meaningful sample; skewness on a handful of points is noise
-        if k < lookback * 0.8 or k < 3:
+        # pandas .skew() returns a value whenever there are >=3 points. Match
+        # that exactly -- an earlier version required 0.8*lookback, which
+        # excluded a few thin-history coins the backtest included and broke
+        # parity (1.44 vs 1.26).
+        if k < 3:
             continue
         sd = col.std(ddof=1)
         if sd == 0:

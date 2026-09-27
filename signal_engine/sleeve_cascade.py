@@ -90,9 +90,13 @@ def latest_target_weights(R: np.ndarray, t: int = None, n_long: int = N_LONG,
     flagging.
 
     HOLDING is the caller's responsibility. This returns the target for a
-    freshly-fired cascade; the orchestrator's cadence gating holds it for
-    HOLD_DAYS. That matches how every other sleeve here works -- the sleeve
-    says what it wants NOW, the orchestrator decides when to ask again.
+    freshly-fired cascade; the orchestrator's cadence gating holds it.
+
+    HOLD SEMANTICS, matching the backtest exactly: a cascade detected at bar t
+    is entered at t+1 and exited at t+3, i.e. held for TWO full bars. Holding
+    three bars instead scored 0.78 vs the backtest's 0.49 -- better, but not
+    what was validated, so the module matches the reference rather than
+    quietly improving on it.
     """
     C = R.shape[1]
     if t is None:
