@@ -158,10 +158,20 @@ def topup_oi(coin: str) -> int:
             continue
     if not out:
         return 0
+    # MATCH THE FILE'S OWN HEADER. The originals were written by pandas WITH an
+    # index column (idx,timestamp,open_interest); appending two columns to a
+    # three-column file shifts every new row one place left, and the loader
+    # then reads the open-interest value AS the timestamp. Every OI-gated
+    # sleeve breaks silently.
+    with open(path) as f:
+        header = f.readline().strip().split(",")
+    has_idx = len(header) == 3 and header[0] in ("idx", "")
+    n_existing = sum(1 for _ in open(path)) - 1
     with open(path, "a", newline="") as f:
         w = csv.writer(f)
-        for ts, oi in sorted(out):
-            w.writerow([ts, f"{oi:.8f}"])
+        for i, (ts, oi) in enumerate(sorted(out)):
+            w.writerow([n_existing + i, ts, f"{oi:.8f}"] if has_idx
+                       else [ts, f"{oi:.8f}"])
     return len(out)
 
 
