@@ -19,10 +19,16 @@ entering at 06:00 and exiting at 18:00 is held for exactly 12 hours.
 """
 from __future__ import annotations
 import os, glob
+import os
 import numpy as np, pandas as pd
 
-TAKER = '/tmp/hyro/taker_data'
-OIDIR = '/tmp/hyro/oi_data'
+# Paths resolve from the environment, then the current directory, then the
+# research sandbox. Hardcoding /tmp/hyro meant every sleeve raised
+# FileNotFoundError on the server.
+TAKER = os.environ.get('HYRO_TAKER_DIR') or (
+    'taker_data' if os.path.isdir('taker_data') else '/tmp/hyro/taker_data')
+OIDIR = os.environ.get('HYRO_OI_DIR') or (
+    'oi_data' if os.path.isdir('oi_data') else '/tmp/hyro/oi_data')
 FEE = 0.00085
 CORE24 = ['1000PEPE','1000RATS','1000SHIB','AAVE','ADA','AVAX','BCH','BNB','DOGE','DOT',
           'ETH','FIL','LDO','LINK','LTC','NEAR','SOL','SUI','TRX','UNI','WLD','XLM','XRP','ZEC']

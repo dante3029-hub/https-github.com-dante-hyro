@@ -16,7 +16,7 @@ import os, glob, sys
 import numpy as np, pandas as pd
 FEE, CAP, MAX_HOLD, ATR_STOP = 0.00085, 0.15, 15, 2.0
 TP_ATR = None   # take-profit in ATR, None = none
-PRICE='/tmp/hyro/price_data'; OIDIR='/tmp/hyro/oi_data'
+PRICE='/tmp/hyro/price_data'; OIDIR=os.environ.get('HYRO_OI_DIR') or ('oi_data' if os.path.isdir('oi_data') else '/tmp/hyro/oi_data')
 SYMS = sorted({os.path.basename(f).replace('_1h.csv','') for f in glob.glob(f'{PRICE}/*_1h.csv')})
 
 def load(sym, tf):

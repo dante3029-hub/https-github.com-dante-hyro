@@ -21,6 +21,7 @@ verify_against_slow() rather than assumed.
 """
 from __future__ import annotations
 
+import os
 import numpy as np
 import pandas as pd
 

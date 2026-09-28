@@ -64,18 +64,31 @@ def check_data(taker_dir, oi_dir, max_age_h=8.0):
                     f"{len(glob.glob(f'{oi_dir}/*_oi_1h.csv'))} OI files")
 
     now = time.time()
-    stale = [(os.path.basename(f), (now - os.path.getmtime(f)) / 3600)
-             for f in files]
+    # Age from the LAST BAR, not the file mtime. `git checkout` rewrites
+    # mtimes, so data reverted to a 17-day-old commit reported "0.0h old"
+    # while the content was stale. mtime measures when the file was TOUCHED;
+    # only the last bar says how current the DATA is.
+    stale = []
+    for f in files:
+        try:
+            with open(f, "rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                fh.seek(max(0, fh.tell() - 2048))
+                tail = fh.read().decode(errors="ignore").strip().splitlines()
+            ts = int(float(tail[-1].split(",")[0]))
+            stale.append((os.path.basename(f), (now - ts / 1000) / 3600))
+        except Exception:
+            stale.append((os.path.basename(f), float("inf")))
     worst = max(stale, key=lambda x: x[1])
     if worst[1] > max_age_h * 4:
         say(CRITICAL, "data", "data is VERY stale",
-            f"{worst[0]} last written {worst[1]:.0f}h ago (limit {max_age_h:.0f}h). "
+            f"{worst[0]} newest BAR is {worst[1]:.0f}h old (limit {max_age_h:.0f}h). "
             f"run/ went 408h stale once while cycles kept 'succeeding'")
     elif worst[1] > max_age_h:
         say(ERROR, "data", "data is stale",
-            f"{worst[0]} last written {worst[1]:.0f}h ago")
+            f"{worst[0]} newest bar {worst[1]:.0f}h old")
     else:
-        say(OK, "data", f"freshest data {worst[1]:.1f}h old")
+        say(OK, "data", f"oldest coin's newest bar is {worst[1]:.1f}h old")
 
     # integrity on a sample -- the bug that hid for months
     bad_taker = bad_delta = 0

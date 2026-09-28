@@ -11,7 +11,7 @@ import os, glob, sys
 import numpy as np, pandas as pd
 sys.path.insert(0,'/tmp/hyro')
 
-PRICE='/tmp/hyro/price_data'; OIDIR='/tmp/hyro/oi_data'
+PRICE='/tmp/hyro/price_data'; OIDIR=os.environ.get('HYRO_OI_DIR') or ('oi_data' if os.path.isdir('oi_data') else '/tmp/hyro/oi_data')
 def load(sym, tf):
     df=pd.read_csv(f'{PRICE}/{sym}_1h.csv')
     ts='open_time' if 'open_time' in df.columns else 'timestamp'
