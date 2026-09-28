@@ -6,7 +6,8 @@ strat8.py there and push strat8_returns.csv.
 """
 import os, glob
 import numpy as np, pandas as pd
-PRICE='/tmp/hyro/price_data'
+PRICE = os.environ.get('HYRO_TAKER_DATA_DIR') or (
+    'taker_data' if os.path.isdir('taker_data') else '/tmp/hyro/taker_data')
 FEE, CAP, N_PER_SIDE, HOLD = 0.00085, 0.15, 5, 7
 SYMS = sorted({os.path.basename(f).replace('_1h.csv','') for f in glob.glob(f'{PRICE}/*_1h.csv')})
 

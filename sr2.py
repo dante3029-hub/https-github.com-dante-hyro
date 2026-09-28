@@ -9,9 +9,18 @@ and the box width is ATR(200) not ATR(14).
 """
 import os, glob, sys
 import numpy as np, pandas as pd
+
+import os as _os
+_HERE = _os.path.dirname(_os.path.abspath(__file__))
+def _dir(env, name):
+    """Resolve a data directory. Hardcoding the research sandbox's
+    /tmp/hyro/... made every sleeve raise FileNotFoundError the moment it ran
+    anywhere else. Override with the env var, else look beside this file."""
+    return _os.environ.get(env) or _os.path.join(_HERE, name)
+
 sys.path.insert(0,'/tmp/hyro')
 
-PRICE='/tmp/hyro/price_data'; OIDIR=os.environ.get('HYRO_OI_DIR') or ('oi_data' if os.path.isdir('oi_data') else '/tmp/hyro/oi_data')
+PRICE = _dir('HYRO_TAKER_DIR', 'taker_data'); OIDIR=os.environ.get('HYRO_OI_DIR') or ('oi_data' if os.path.isdir('oi_data') else '/tmp/hyro/oi_data')
 def load(sym, tf):
     df=pd.read_csv(f'{PRICE}/{sym}_1h.csv')
     ts='open_time' if 'open_time' in df.columns else 'timestamp'

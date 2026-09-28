@@ -14,9 +14,18 @@ Four tradeable readings, all tested:
 """
 import os, glob, sys
 import numpy as np, pandas as pd
+
+import os as _os
+_HERE = _os.path.dirname(_os.path.abspath(__file__))
+def _dir(env, name):
+    """Resolve a data directory. Hardcoding the research sandbox's
+    /tmp/hyro/... made every sleeve raise FileNotFoundError the moment it ran
+    anywhere else. Override with the env var, else look beside this file."""
+    return _os.environ.get(env) or _os.path.join(_HERE, name)
+
 FEE, CAP, MAX_HOLD, ATR_STOP = 0.00085, 0.15, 15, 2.0
 TP_ATR = None   # take-profit in ATR, None = none
-PRICE='/tmp/hyro/price_data'; OIDIR=os.environ.get('HYRO_OI_DIR') or ('oi_data' if os.path.isdir('oi_data') else '/tmp/hyro/oi_data')
+PRICE = _dir('HYRO_TAKER_DIR', 'taker_data'); OIDIR=os.environ.get('HYRO_OI_DIR') or ('oi_data' if os.path.isdir('oi_data') else '/tmp/hyro/oi_data')
 SYMS = sorted({os.path.basename(f).replace('_1h.csv','') for f in glob.glob(f'{PRICE}/*_1h.csv')})
 
 def load(sym, tf):

@@ -502,7 +502,8 @@ def srflip_hourly(syms, hidx, coins, tf=6, stop_atr=3.0, hold=15, window=20):
                                max_gross=1.0), len(tr)
 
 
-BTCP = '/tmp/hyro/btc_pairs'
+BTCP = os.environ.get('HYRO_BTC_PAIRS_DIR') or (
+    'btc_pairs' if os.path.isdir('btc_pairs') else '/tmp/hyro/btc_pairs')
 _UNPREFIX = {'1000PEPE': 'PEPE', '1000SHIB': 'SHIB', '1000RATS': 'RATS',
              '1000BONK': 'BONK', '1000FLOKI': 'FLOKI'}
 

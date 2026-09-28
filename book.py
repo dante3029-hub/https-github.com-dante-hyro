@@ -8,7 +8,8 @@ Costs locked: FEE 0.055%/side + SLIP 0.03% = 0.00085.
 """
 import os, glob
 import numpy as np, pandas as pd
-TAKER='/tmp/hyro/taker_data'
+TAKER = os.environ.get('HYRO_TAKER_DATA_DIR') or (
+    'taker_data' if os.path.isdir('taker_data') else '/tmp/hyro/taker_data')
 FEE, CAP = 0.00085, 0.15
 # PIN THE UNIVERSE. Globbing taker_data/ meant that when the 60-coin fetch was
 # pushed, book.py silently switched from 24 coins to 60 -- and skew went from

@@ -16,7 +16,16 @@ from __future__ import annotations
 import os
 import numpy as np, pandas as pd
 
-TAKER = '/tmp/hyro/taker_data'
+import os as _os
+_HERE = _os.path.dirname(_os.path.abspath(__file__))
+def _dir(env, name):
+    """Resolve a data directory. Hardcoding the research sandbox's
+    /tmp/hyro/... made every sleeve raise FileNotFoundError the moment it ran
+    anywhere else. Override with the env var, else look beside this file."""
+    return _os.environ.get(env) or _os.path.join(_HERE, name)
+
+
+TAKER = os.environ.get('HYRO_TAKER_DIR') or ('taker_data' if os.path.isdir('taker_data') else '/tmp/hyro/taker_data')
 FEE = 0.00085
 
 
