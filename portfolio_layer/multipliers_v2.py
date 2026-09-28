@@ -45,6 +45,37 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+
+# ── the vols the research measured, full sample ──────────────────────────
+#
+# A live bot starts with NO return history, so equal-risk cannot scale
+# anything and every sleeve defaults to 1.0. That is not a small problem:
+# fvg's daily vol is 0.0293 and oirank's is 0.0045, so equal WEIGHT would let
+# fvg take roughly 6.5x the risk oirank does, and the book being run would not
+# be the book that was validated.
+#
+# These are measured over the full 1,315-day sample by hourly_sim, which is
+# what produced every number in the book (4.13 Sharpe, 3.7% maxDD). Using them
+# as the prior is MORE faithful than a trailing 60-day window, not less.
+#
+# They are a PRIOR, not a fixture: once a sleeve has `MIN_OBS_FOR_LIVE` days of
+# live history, its own trailing vol takes over. Blending the two would hide
+# the moment live diverges from research, which is exactly what the paper
+# month exists to detect.
+SLEEVE_VOL_DAILY = {
+    'cascade': 0.012690,
+    'delta':   0.010008,
+    'fvg':     0.029302,
+    'oirank':  0.004495,
+    'pattern': 0.015951,
+    'relvol':  0.007449,
+    'skew':    0.009128,
+    'sr':      0.015094,
+    'srflip':  0.010289,
+}
+
+MIN_OBS_FOR_LIVE = 60      # days of live history before trusting it over the prior
+
 MIN_OBS = 20            # below this, a vol estimate is noise
 MAX_MULT = 4.0          # cap -- a flat sleeve has near-zero vol, not low risk
 MIN_MULT = 0.1
@@ -86,20 +117,34 @@ def compute_multipliers_equal_risk(
                        account_multiplier)
         return {k: 0.0 for k in sleeve_return_history}
 
-    vols, missing = {}, []
+    vols, from_prior = {}, []
     for k, h in sleeve_return_history.items():
-        v = _trailing_vol(h, window)
+        a = np.asarray(h, dtype=float) if h is not None else np.array([])
+        a = a[np.isfinite(a)]
+        v = _trailing_vol(h, window) if a.size >= MIN_OBS_FOR_LIVE else float("nan")
         if np.isfinite(v):
             vols[k] = v
+        elif k in SLEEVE_VOL_DAILY:
+            # fall back to the researched vol rather than defaulting to 1.0.
+            # Defaulting would size a 0.029-vol sleeve the same as a 0.0045 one.
+            vols[k] = SLEEVE_VOL_DAILY[k]
+            from_prior.append(k)
         else:
-            missing.append(k)
+            from_prior.append(k)
+    missing = [k for k in from_prior if k not in vols]
     if not vols:
         logger.error("no sleeve has usable return history -- every multiplier "
                      "defaults to %.1f. The book is NOT risk-balanced.",
                      DEFAULT_MULT)
         return {k: DEFAULT_MULT * account_multiplier for k in sleeve_return_history}
+    if from_prior:
+        known = [k for k in from_prior if k in SLEEVE_VOL_DAILY]
+        if known:
+            logger.info("using researched vols for %s (< %d days of live "
+                        "history yet)", ", ".join(sorted(known)), MIN_OBS_FOR_LIVE)
     if missing:
-        logger.warning("no usable history for %s -- defaulting them to %.1f",
+        logger.warning("no history AND no researched vol for %s -- defaulting "
+                       "to %.1f, the book is NOT risk-balanced for these",
                        ", ".join(sorted(missing)), DEFAULT_MULT)
 
     target = float(np.median(list(vols.values())))
