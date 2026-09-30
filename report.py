@@ -60,6 +60,27 @@ def _post(webhook: str, content: str) -> bool:
         return False
 
 
+def _px(v: float) -> str:
+    """Format a price at a precision that suits its magnitude.
+
+    A fixed 4dp renders 1000PEPE at $0.0000121 as "0.0000" -- the report would
+    show a position with no usable price. Crypto spans eight orders of
+    magnitude, so the precision has to follow the number.
+    """
+    a = abs(v)
+    if a == 0:
+        return "0"
+    if a >= 1000:
+        return f"{v:,.2f}"
+    if a >= 1:
+        return f"{v:,.4f}"
+    if a >= 0.01:
+        return f"{v:.5f}"
+    if a >= 0.0001:
+        return f"{v:.7f}"
+    return f"{v:.9f}"
+
+
 @dataclass
 class CycleReport:
     equity: float
@@ -84,14 +105,14 @@ class CycleReport:
                stop: float, why: str = ""):
         d = "LONG " if side > 0 else "SHORT"
         risk = abs(stop - price) / price * 100 if price else 0
-        line = f"`{sleeve:<7}` {d} **{coin}** @ {price:,.4f} · stop {stop:,.4f} ({risk:.1f}%)"
+        line = f"`{sleeve:<7}` {d} **{coin}** @ {_px(price)} · stop {_px(stop)} ({risk:.1f}%)"
         if why:
             line += f" — {why}"
         self.opens.append(line)
 
     def closed(self, sleeve: str, coin: str, price: float, why: str,
                pnl_pct: Optional[float] = None):
-        line = f"`{sleeve:<7}` closed **{coin}** @ {price:,.4f} — {why}"
+        line = f"`{sleeve:<7}` closed **{coin}** @ {_px(price)} — {why}"
         if pnl_pct is not None:
             line += f" · {pnl_pct:+.1f}%"
         self.closes.append(line)
