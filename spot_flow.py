@@ -110,6 +110,8 @@ SPOT, _SPOT_TRIED = resolve_dir("HYRO_SPOT_DATA_DIR", "spot_data", True)
 FUND_DIR, _FUND_TRIED = resolve_dir("HYRO_FUNDING_DATA_DIR", "funding_data", True)
 
 MIN_DAYS = 400          # same floor book.panel() uses
+MIN_BASE_OBS = 60       # minimum observations for a coin's trailing
+                        # baseline mean to count as a 'long-run average'
 Z = lambda x: (x - x.mean()) / x.std() if x.std() > 0 else x * 0.0
 
 
@@ -299,6 +301,50 @@ def sig_sfund_mask(SFN, FUND, k):
         fu = FUND.iloc[t - k:t].sum(min_count=1)
         score = Z(s) - Z(fu)
         return score.where(np.sign(s) != np.sign(fu))
+    return f
+
+
+def sig_spot_demean(SFN, k, win=252):
+    """Spot flow MINUS each coin's own trailing average spot flow.
+
+    WHY THIS EXISTS: --diag showed a fixed portfolio of spot_only's average
+    weights earns Sharpe 0.62 on its own -- 38% of the 1.65. That static
+    part is a bet on coin CHARACTERISTICS: a coin's average spot-buy ratio
+    over years reflects its float, holder base and which venues its volume
+    sits on, not anything timely. Ranking on a static characteristic is the
+    component most likely to vanish out of sample.
+
+    Subtracting each coin's own trailing mean removes it, leaving only
+    "is this coin's spot flow unusual FOR THIS COIN right now". If the
+    Sharpe survives, it is genuine timing. If it collapses to ~0.6, the
+    original result was mostly the tilt.
+
+    The baseline window is TRAILING and ends at t, never including bar t,
+    so this stays causal. An expanding or full-sample mean would leak the
+    future into the baseline -- a subtle lookahead that would look like a
+    free improvement."""
+    def f(t):
+        lo = max(0, t - win)
+        cw = SFN.iloc[t - k:t]
+        bw = SFN.iloc[lo:t]
+        cur = cw.mean().where(cw.notna().sum() >= 1)
+        # a "long-run average" built from a handful of points is not one;
+        # require real history or the coin drops out of the cross-section
+        base = bw.mean().where(bw.notna().sum() >= MIN_BASE_OBS)
+        return Z(cur - base)
+    return f
+
+
+def sig_spot_level(SFN, win=252):
+    """The static tilt made EXPLICIT: rank purely on each coin's trailing
+    average spot flow, with no recency at all. This is a control, not a
+    candidate -- if it scores near the 0.62 that --diag's static test
+    found, the decomposition is confirmed and we know exactly how much of
+    spot_only is characteristic rather than signal."""
+    def f(t):
+        lo = max(0, t - win)
+        bw = SFN.iloc[lo:t]
+        return Z(bw.mean().where(bw.notna().sum() >= MIN_BASE_OBS))
     return f
 
 
@@ -513,6 +559,14 @@ def _grid(have_funding: bool = False):
     # The pre-registered confluence grid: 3 variants x 2 lookbacks = 6.
     # Skipped entirely when there is no funding data, so a missing input
     # narrows the test rather than silently changing it.
+    # Decomposition of the spot_only result: demeaned (pure timing) and
+    # level-only (pure characteristic). Pre-registered with a stated
+    # purpose, and counted in the Bonferroni like everything else.
+    for k in (3, 5):
+        g[f"spot_dm k={k}"] = (
+            (lambda kk: (lambda S, P, F: sig_spot_demean(S, kk)))(k), 5, 7)
+    g["spot_level"] = (lambda S, P, F: sig_spot_level(S), 5, 7)
+
     if have_funding:
         for k in (3, 5):
             g[f"sfund_add k={k}"] = (
