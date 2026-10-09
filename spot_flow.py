@@ -335,6 +335,67 @@ def sig_spot_demean(SFN, k, win=252):
     return f
 
 
+def sig_spot_std(SFN, k, win=252):
+    """Per-coin STANDARDISED spot flow: subtract each coin's own trailing
+    mean AND divide by its own trailing standard deviation.
+
+    WHY: --diag found that dropping ZEC takes spot_only from 1.65 to 0.98.
+    One coin should not be able to decide a 23-coin cross-sectional result.
+    The reason it can is that a cross-sectional z-score ranks coins against
+    EACH OTHER, so a coin whose flow reading is structurally more dispersed
+    (thin spot book, concentrated holder base) sits in the top or bottom 5
+    almost every rebalance regardless of whether anything happened.
+
+    Demeaning alone (sig_spot_demean) removes a coin's average LEVEL but
+    not its SCALE, so the most volatile reader still dominates the
+    extremes. Dividing by its own std puts every coin on the same footing:
+    the question becomes "how unusual is this for THIS coin", which is the
+    only form in which the comparison across coins is fair.
+
+    Trailing windows end at t and never include it."""
+    def f(t):
+        lo = max(0, t - win)
+        cw = SFN.iloc[t - k:t]
+        bw = SFN.iloc[lo:t]
+        cur = cw.mean().where(cw.notna().sum() >= 1)
+        nobs = bw.notna().sum()
+        mu = bw.mean().where(nobs >= MIN_BASE_OBS)
+        sd = bw.std().where(nobs >= MIN_BASE_OBS)
+        return Z((cur - mu) / sd.replace(0, np.nan))
+    return f
+
+
+def sig_svp(SVOL, VOL, k, win=252):
+    """SPOT-to-PERP VOLUME ratio -- not direction, but WHO is trading.
+    A high spot share means cash-driven activity; a low one means the
+    action is in leverage. Nothing in the book reads this.
+
+    THE SCALE TRAP, and it would have silently ruined this: perps use 1000x
+    contracts for small-unit coins, so 1000PEPE's spot base volume is 1000x
+    its perp base volume purely as a unit convention. A cross-sectional
+    z-score CANNOT remove a per-coin constant offset -- it would park every
+    1000x coin permanently at one end of the ranking and the sleeve would
+    be a bet on which coins have a 1000x contract.
+
+    So the log ratio is demeaned PER COIN against its own trailing average
+    before ranking. That removes any constant unit offset exactly, because
+    a constant in log space is a constant to subtract."""
+    def f(t):
+        lo = max(0, t - win)
+        sv = SVOL.iloc[t - k:t].sum(min_count=1)
+        pv = VOL.iloc[t - k:t].sum(min_count=1)
+        cur = np.log((sv / pv.replace(0, np.nan)).replace(0, np.nan))
+
+        bs = SVOL.iloc[lo:t]
+        bp = VOL.iloc[lo:t]
+        base = np.log((bs / bp.replace(0, np.nan)).replace(0, np.nan))
+        nobs = base.notna().sum()
+        mu = base.mean().where(nobs >= MIN_BASE_OBS)
+        sd = base.std().where(nobs >= MIN_BASE_OBS)
+        return Z((cur - mu) / sd.replace(0, np.nan))
+    return f
+
+
 def sig_spot_level(SFN, win=252):
     """The static tilt made EXPLICIT: rank purely on each coin's trailing
     average spot flow, with no recency at all. This is a control, not a
@@ -451,7 +512,7 @@ def audit() -> int:
     #         whose last row is poisoned and confirm the score does not move.
     log("")
     t = len(idx) - 1
-    builders = dict(_grid(have_funding=bool(fcov)))
+    builders = dict(_grid(have_funding=bool(fcov), SVOL=SVOL, VOL=VOL))
     # one representative per family is enough; the lookback does not change
     # which bars a slice touches
     fam, seen = {}, set()
@@ -513,7 +574,8 @@ def _roll(M: pd.DataFrame, off: int) -> pd.DataFrame:
                         index=M.index, columns=M.columns)
 
 
-def null_dist(R, builder, SFN, PFN, FUND, n, hold, seeds=60, seed0=0):
+def null_dist(R, builder, SFN, PFN, FUND, n, hold, seeds=60, seed0=0,
+              runner=None):
     """Circular-time-shift null for ONE config.
 
     `builder(S, P)` must return a signal function, so the same construction
@@ -530,15 +592,16 @@ def null_dist(R, builder, SFN, PFN, FUND, n, hold, seeds=60, seed0=0):
     out = []
     for _ in range(seeds):
         off = int(rng.integers(lo, T - lo))
-        s = xs(R, builder(_roll(SFN, off), _roll(PFN, off),
-                          _roll(FUND, off)), n=n, hold=hold)
+        run = runner if runner is not None else xs
+        s = run(R, builder(_roll(SFN, off), _roll(PFN, off),
+                           _roll(FUND, off)), n=n, hold=hold)
         out.append(stats(s)[0])
     return np.array(out)
 
 
 # config name -> (builder, n_per_side, hold). One table, so the sweep, the
 # null and the verdict can never be computing different things.
-def _grid(have_funding: bool = False):
+def _grid(have_funding: bool = False, SVOL=None, VOL=None):
     """Every builder takes (SFN, PFN, FUND) whether it uses all three or not,
     so null_dist can roll all three panels through one call signature. If
     funding is rolled while the rest is not, the funding leg stays aligned
@@ -566,6 +629,17 @@ def _grid(have_funding: bool = False):
         g[f"spot_dm k={k}"] = (
             (lambda kk: (lambda S, P, F: sig_spot_demean(S, kk)))(k), 5, 7)
     g["spot_level"] = (lambda S, P, F: sig_spot_level(S), 5, 7)
+    # per-coin STANDARDISED (scale as well as level), so no single coin's
+    # dispersion can own the extremes
+    for k in (3, 5):
+        g[f"spot_std k={k}"] = (
+            (lambda kk: (lambda S, P, F: sig_spot_std(S, kk)))(k), 5, 7)
+    # spot-vs-perp VOLUME ratio: who is trading, not which way. Needs the
+    # raw volume panels, so it is only offered when they are supplied.
+    if SVOL is not None and VOL is not None:
+        for k in (3, 5):
+            g[f"svp k={k}"] = (
+                (lambda kk: (lambda S, P, F: sig_svp(SVOL, VOL, kk)))(k), 5, 7)
 
     if have_funding:
         for k in (3, 5):
@@ -580,7 +654,7 @@ def _grid(have_funding: bool = False):
     return g
 
 
-def sweep(n_null=200, panels=None, quiet=False) -> int:
+def sweep(n_null=200, panels=None, quiet=False, runner=None) -> int:
     if panels is None:
         rc = audit()
         if rc == 2:
@@ -590,7 +664,13 @@ def sweep(n_null=200, panels=None, quiet=False) -> int:
      FUND, fcov) = panels
 
     have_f = bool(fcov)
-    grid = _grid(have_funding=have_f)
+    grid = _grid(have_funding=have_f, SVOL=SVOL, VOL=VOL)
+    run = runner if runner is not None else xs
+    if runner is not None and not quiet:
+        log("  WEIGHTS: equal RISK inside the sleeve (inverse trailing vol),")
+        log("  not equal dollars. book.xs gives every position 0.5/n, so the")
+        log("  highest-vol holding dominates sleeve PnL -- which is why one")
+        log("  coin can decide the result.")
     if not quiet:
         log("\n" + "=" * 78)
         log("  SWEEP")
@@ -616,7 +696,7 @@ def sweep(n_null=200, panels=None, quiet=False) -> int:
                   for tt in range(60, len(R), 25)]
         med = float(np.median(scored)) if scored else 0.0
         frac_ok = float(np.mean([x >= need for x in scored])) if scored else 0.0
-        series[name] = xs(R, sig, n=n, hold=hold)
+        series[name] = run(R, sig, n=n, hold=hold)
         eligible[name] = (frac_ok >= 0.80, med, frac_ok, need)
         tag = "" if frac_ok >= 0.80 else \
             f"<- SKIPS {100*(1-frac_ok):.0f}% of rebalances (scores {med:.0f}/{need})"
@@ -662,7 +742,8 @@ def sweep(n_null=200, panels=None, quiet=False) -> int:
         log(f"  NULL for the winning config ({best}), {n_null} circular")
         log(f"  time shifts. Turnover and fee drag preserved; only the")
         log(f"  alignment with forward returns is destroyed.")
-    null = null_dist(R, b, SFN, PFN, FUND, n, hold, seeds=n_null)
+    null = null_dist(R, b, SFN, PFN, FUND, n, hold, seeds=n_null,
+                     runner=run)
 
     n_cfg = len(results)
 
@@ -967,7 +1048,7 @@ def _collect(R, sig, n, hold):
 def diag(cfgname=None) -> int:
     (idx, PX, R, VOL, DN, SVOL, SDN, PFN, SFN, covered,
      FUND, fcov) = build()
-    grid = _grid(have_funding=bool(fcov))
+    grid = _grid(have_funding=bool(fcov), SVOL=SVOL, VOL=VOL)
     if cfgname is None:
         cfgname = "spot_only k=3"
     if cfgname not in grid:
@@ -1059,6 +1140,81 @@ def diag(cfgname=None) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------
+# EQUAL-RISK WEIGHTS INSIDE THE SLEEVE
+# --------------------------------------------------------------------------
+# book.xs assigns every position 0.5/n -- equal DOLLARS. A high-vol coin
+# therefore contributes far more variance to sleeve PnL than a low-vol one,
+# so whichever name is most volatile dominates the result. ZEC is high-vol
+# and has now surfaced as the concentration problem in four separate places;
+# that is consistent with a WEIGHTING artifact rather than four independent
+# coincidences.
+#
+# The portfolio layer already equalises risk ACROSS sleeves
+# (scale[k] = median(vol)/vol[k]) and then each sleeve internally lets its
+# most volatile holding take over. This closes that inconsistency.
+#
+# `force_equal=True` reproduces book.xs exactly and is used as the parity
+# test: identical loop, identical fees, identical carry, only the weights
+# differ. Without that proof, a difference in result could be the loop
+# rather than the weighting.
+
+def xs_rw(R, sig, n=5, hold=7, vol_win=60, cap=4.0, force_equal=False):
+    idx = R.index
+    acc = np.zeros(len(idx))
+    # trailing per-coin vol. min_periods guards the warmup; the window ends
+    # at t-1 at use time, so this never reads the bar being traded.
+    V = R.rolling(vol_win, min_periods=30).std()
+
+    for ph in range(hold):
+        wp = pd.Series(0.0, index=R.columns)
+        out = np.zeros(len(idx))
+        for t in range(60, len(idx)):
+            r = R.iloc[t].fillna(0.0)
+            carry = float((wp * r).sum())
+            if (t - ph) % hold != 0:
+                out[t] = carry
+                continue
+            s = sig(t)
+            v = s.dropna()
+            if len(v) < 2 * n + 2:
+                out[t] = carry
+                continue
+            o = v.sort_values()
+            w = pd.Series(0.0, index=R.columns)
+            vv = V.iloc[t - 1]                 # causal: vol through t-1
+
+            for names, sign in ((list(o.index[-n:]), 1.0),
+                                (list(o.index[:n]), -1.0)):
+                if force_equal:
+                    for c in names:
+                        w[c] = sign * 0.5 / n
+                    continue
+                iv = {}
+                for c in names:
+                    x = vv.get(c, np.nan)
+                    if np.isfinite(x) and x > 0:
+                        iv[c] = 1.0 / x
+                if not iv:
+                    # no vol estimate for any name on this side -- fall back
+                    # to equal weight rather than silently dropping the side
+                    for c in names:
+                        w[c] = sign * 0.5 / n
+                    continue
+                ivs = pd.Series(iv)
+                # cap relative to the median so one unusually quiet coin
+                # cannot absorb the whole side's risk budget
+                ivs = ivs.clip(upper=float(ivs.median()) * cap)
+                ivs = ivs / ivs.sum() * 0.5
+                for c, x in ivs.items():
+                    w[c] = sign * float(x)
+
+            out[t] = float((w * r).sum()) - float((w - wp).abs().sum()) * FEE
+            wp = w
+        acc += out
+    return pd.Series(acc[60:] / hold, index=idx[60:])
+
+
 if __name__ == "__main__":
     if "--audit" in sys.argv:
         raise SystemExit(audit())
@@ -1072,7 +1228,8 @@ if __name__ == "__main__":
     if "--selftest" in sys.argv:
         raise SystemExit(selftest(n_null=nn))
     if "--sweep" in sys.argv:
-        raise SystemExit(sweep(n_null=nn)[0])
+        rw = xs_rw if "--rw" in sys.argv else None
+        raise SystemExit(sweep(n_null=nn, runner=rw)[0])
     if "--corr" in sys.argv:
         raise SystemExit(corr())
     if "--diag" in sys.argv:
@@ -1082,4 +1239,5 @@ if __name__ == "__main__":
         raise SystemExit(diag(cfg))
     log(__doc__)
     log("  pick one: --audit | --selftest | --sweep | --corr | --diag")
+    log("  add --rw to --sweep for equal-RISK weights inside the sleeve")
     raise SystemExit(0)

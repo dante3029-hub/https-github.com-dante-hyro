@@ -61,7 +61,8 @@ import pandas as pd
 
 import book
 from book import FEE, stats, xs
-from spot_flow import _collect          # the fork already proven against xs
+from spot_flow import _collect, xs_rw   # fork + equal-risk weights,
+                                        # both proven against book.xs
 
 
 def log(m=""):
@@ -113,7 +114,7 @@ def parity_check(R, VOL, DN) -> bool:
     return ok
 
 
-def audit_one(name, R, sig, n, hold, loo=False):
+def audit_one(name, R, VOL, DN, sig, n, hold, loo=False):
     series, hist = _collect(R, sig, n, hold)
     ref = xs(R, sig, n=n, hold=hold)
     gap = float((series - ref).abs().max())
@@ -138,9 +139,15 @@ def audit_one(name, R, sig, n, hold, loo=False):
     log(f"  {name}   Sharpe {sh:.2f}   ann {ann:.1f}%   "
         f"{len(hist)} rebalances   n={n} hold={hold}")
     log(f"  {'='*66}")
+    share_txt = (f"-> reproduces {share:.0f}% of Sharpe"
+                 if np.isfinite(share)
+                 else "-> share undefined (sleeve Sharpe <= 0)")
     log(f"    static book  Sharpe {s_sh:>6.2f}  ann {s_ann:>6.1f}%  "
-        f"-> reproduces {share:.0f}% of Sharpe")
-    verdict = ("STATIC TILT" if share > 70 else
+        f"{share_txt}")
+    # with Sharpe <= 0 the "share of Sharpe" is undefined, not small --
+    # printing nan% next to "mostly timing" would read as a pass
+    verdict = ("n/a (Sharpe<=0)" if not np.isfinite(share) else
+               "STATIC TILT" if share > 70 else
                "MIXED" if share > 40 else "mostly timing")
     log(f"    verdict: {verdict}")
     log(f"    coins held >70% on one side: {tilted}")
@@ -149,17 +156,25 @@ def audit_one(name, R, sig, n, hold, loo=False):
     log(f"    most-held: " + "  ".join(
         f"{c}({pl[c]:.0f}L/{ps[c]:.0f}S)" for c in top))
 
+    # EQUAL-RISK vs EQUAL-DOLLAR inside the sleeve. book.xs gives every
+    # position 0.5/n, so the highest-vol holding dominates sleeve PnL. That
+    # is a weighting artifact, not a signal property, and it is the most
+    # likely reason one coin (ZEC, repeatedly) can decide a sleeve's result.
+    rw = xs_rw(R, sig, n=n, hold=hold)
+    rw_sh, rw_ann = stats(rw)
+    log(f"    equal-RISK   Sharpe {rw_sh:>6.2f}  ann {rw_ann:>6.1f}%  "
+        f"(equal-dollar {sh:.2f}, {rw_sh-sh:+.2f})")
+
     worst = None
     if loo:
         rows = []
         for c in list(R.columns):
             keep = [x for x in R.columns if x != c]
-            Rk, Vk, Dk = R[keep], None, None
-            s2 = live_sleeves(Rk, VOL[keep], DN[keep]).get(name)
+            s2 = live_sleeves(R[keep], VOL[keep], DN[keep]).get(name)
             if s2 is None:
                 break
             sg, nn, hh = s2
-            rows.append((c, stats(xs(Rk, sg, n=nn, hold=hh))[0]))
+            rows.append((c, stats(xs(R[keep], sg, n=nn, hold=hh))[0]))
         if rows:
             rows.sort(key=lambda x: x[1])
             worst = (rows[0][0], sh - rows[0][1])
@@ -167,7 +182,7 @@ def audit_one(name, R, sig, n, hold, loo=False):
                 f"{worst[1]:+.2f} Sharpe "
                 f"({', '.join(f'{c} {v:.2f}' for c, v in rows[:3])})")
     return dict(name=name, sharpe=sh, static=s_sh, share=share,
-                tilted=tilted, worst=worst)
+                tilted=tilted, worst=worst, rw=rw_sh)
 
 
 def main() -> int:
@@ -187,7 +202,7 @@ def main() -> int:
 
     out = []
     for name, (sig, n, hold) in live_sleeves(R, VOL, DN).items():
-        r = audit_one(name, R, sig, n, hold, loo=loo)
+        r = audit_one(name, R, VOL, DN, sig, n, hold, loo=loo)
         if r:
             out.append(r)
 
@@ -195,16 +210,29 @@ def main() -> int:
     log("  " + "=" * 66)
     log("  SUMMARY")
     log("  " + "=" * 66)
-    log(f"  {'sleeve':<10}{'Sharpe':>8}{'static':>8}{'share':>8}"
-        f"{'verdict':>16}")
+    log(f"  {'sleeve':<10}{'$-wt':>8}{'risk-wt':>9}{'static':>8}"
+        f"{'share':>7}{'verdict':>15}")
     for r in out:
-        v = ("STATIC TILT" if r["share"] > 70 else
+        fin = np.isfinite(r["share"])
+        v = ("n/a (Sh<=0)" if not fin else
+             "STATIC TILT" if r["share"] > 70 else
              "MIXED" if r["share"] > 40 else "mostly timing")
-        log(f"  {r['name']:<10}{r['sharpe']:>8.2f}{r['static']:>8.2f}"
-            f"{r['share']:>7.0f}%{v:>16}")
+        sc = f"{r['share']:>5.0f}%" if fin else f"{'--':>6}"
+        log(f"  {r['name']:<10}{r['sharpe']:>8.2f}{r['rw']:>9.2f}"
+            f"{r['static']:>8.2f}{sc:>7}{v:>15}")
+    gains = [r for r in out if r["rw"] > r["sharpe"] + 0.15]
+    if gains:
+        log("")
+        log(f"  Equal-RISK weighting IMPROVES "
+            f"{', '.join(r['name'] for r in gains)}. These sleeves were")
+        log(f"  being dominated by their most volatile holding. This is a")
+        log(f"  free fix -- no new signal, no extra parameter, just weights")
+        log(f"  consistent with what the portfolio layer already does across")
+        log(f"  sleeves. Worth applying to the live book.")
 
-    bad = [r for r in out if r["share"] > 70]
-    mixed = [r for r in out if 40 < r["share"] <= 70]
+    bad = [r for r in out if np.isfinite(r["share"]) and r["share"] > 70]
+    mixed = [r for r in out
+             if np.isfinite(r["share"]) and 40 < r["share"] <= 70]
     log("")
     if bad:
         log(f"  {len(bad)} sleeve(s) are mostly a STATIC COIN TILT: "
