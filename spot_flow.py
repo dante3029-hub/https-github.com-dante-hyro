@@ -1,0 +1,671 @@
+#!/usr/bin/env python3
+"""
+spot_flow.py -- does spot-vs-perp taker-flow divergence carry an edge?
+
+THE HYPOTHESIS
+--------------
+All nine live sleeves read the perp tape. Spot flow is a different tape.
+The informative state is DISAGREEMENT between them:
+
+    spot flow > perp flow   ->  cash buyers absorbing leveraged sellers
+    spot flow < perp flow   ->  holders distributing into leveraged chasers
+
+Signal (scale-free, which is mandatory -- see SPOT_FLOW.md on the 1000x
+contract trap):
+
+    SFN = spot_delta / spot_volume        per coin per day, in [-1, 1]
+    PFN = perp_delta / perp_volume        per coin per day, in [-1, 1]
+    div(t) = z( sum SFN[t-k:t] ) - z( sum PFN[t-k:t] )
+
+Both legs are z-scored cross-sectionally BEFORE subtracting, so a coin whose
+spot pair is denominated 1000x differently contributes identically. This is
+the whole reason the signal is built on ratios and not on raw delta.
+
+HARNESS
+-------
+`xs()`, `stats()`, `panel()` and FEE are IMPORTED FROM book.py, not
+reimplemented. That is deliberate. The last time a sleeve got a fresh test
+harness (oirank) it reported Sharpe +4.09 because the harness applied
+weights from sig(t) to R(t) on the same bar; the real number was 1.34. The
+one in book.py has the timing invariant that matters:
+
+    sig(t) may only read .iloc[:t]   (strictly before t)
+    R.iloc[t] = PX[t]/PX[t-1] - 1    (the return it then earns)
+
+So a signal formed on the close of t-1 earns the t-1 -> t return. Any new
+signal function added here MUST respect that slice. `--audit` checks it.
+
+MULTIPLE TESTING -- AND A HARNESS BUG THAT WAS CAUGHT HERE
+----------------------------------------------------------
+This script sweeps lookbacks x holds x variants, so the best config wins
+partly by luck and must be measured against a null.
+
+An earlier version of this file REPORTED "clears the multiple-testing bar"
+ON A PANEL BUILT FROM RANDOM NUMBERS. Two things were wrong, and only one of
+them is the one you would guess:
+
+  1. THE DECISIVE BUG: the bar was a parametric
+     `null.mean() + 2.3*null.std()`, and the null was computed once for an
+     arbitrary config (`div k=3 h=7`) and then applied to whichever config
+     won -- which was `disagree k=3`, a config that scores only ~11 names
+     instead of 24 and therefore has a much wider null. Judging a thin,
+     high-variance config against a wide config's null is precisely how a
+     high-variance config wins a sweep on noise.
+
+     Fixed by (a) computing the null FOR THE WINNING CONFIG, and (b) using
+     an empirical p-value Bonferroni-corrected by the number of configs
+     tried. On the noise panel the winner scored +0.76 against a null
+     centred at -1.04 -- a 2.6-sigma single-test draw, p=0.025 -- which
+     Bonferroni over 21 configs correctly turns into p=0.52, rejected.
+
+  2. The null is a CIRCULAR TIME SHIFT (roll the signal panel by a random
+     offset, wrapping) rather than book.xs(shuffle=True). The shift
+     preserves the signal's own autocorrelation and cross-sectional shape by
+     construction and destroys only its alignment with forward returns.
+
+     HONESTY NOTE: the original justification written here -- that
+     shuffle=True inflates turnover and so over-penalises the null -- was
+     ASSERTED AND THEN MEASURED FALSE. Turnover is 1.574 (shift) vs 1.576
+     (shuffle) vs 1.570 (real), a 0.3% difference worth 0.03% annualised.
+     The shuffle null did come out systematically lower (-1.61 vs -1.04 on
+     the same panel and config), but the mechanism for that gap was NOT
+     established, so it is not claimed. The circular shift is preferred on
+     the a-priori ground above, not on the strength of that gap.
+
+WHY THE NULL IS CENTRED NEAR -1.0, NOT 0
+----------------------------------------
+A no-edge version of this strategy does not score 0; it scores its own cost
+drag. Fees are ~7% annualised against ~12% book vol, so "no edge" is roughly
+Sharpe -1. That is why the real result must be compared against the measured
+null and never against zero -- and why a positive raw Sharpe is not, on its
+own, evidence of anything.
+
+USAGE
+-----
+    python3 -u spot_flow.py --audit         # timing + data integrity only
+    python3 -u spot_flow.py --sweep         # the full grid + null
+    python3 -u spot_flow.py --sweep --nulls 500   # finer p resolution
+    python3 -u spot_flow.py --selftest      # prove the verdict rejects noise
+    python3 -u spot_flow.py --corr          # correlation vs live sleeves
+"""
+from __future__ import annotations
+
+import os
+import sys
+
+import numpy as np
+import pandas as pd
+
+import book
+from book import CORE24, FEE, stats, xs
+
+# One resolver, shared with fetch_spot.py. Two modules disagreeing about
+# where the data lives is the bug that broke this on the server.
+from fetch_spot import resolve_dir
+
+SPOT, _SPOT_TRIED = resolve_dir("HYRO_SPOT_DATA_DIR", "spot_data", True)
+
+MIN_DAYS = 400          # same floor book.panel() uses
+Z = lambda x: (x - x.mean()) / x.std() if x.std() > 0 else x * 0.0
+
+
+def log(m=""):
+    print(m, flush=True)
+
+
+# --------------------------------------------------------------------------
+# spot panel, aligned onto the perp index
+# --------------------------------------------------------------------------
+def load_spot_daily(sym: str) -> pd.DataFrame | None:
+    """1h spot bars -> daily volume and delta. Mirrors book.load_daily so the
+    resample boundaries are identical; a one-bar offset between the two
+    panels would manufacture divergence out of nothing."""
+    path = f"{SPOT}/{sym}_spot_1h.csv"
+    if not os.path.exists(path):
+        return None
+    try:
+        df = pd.read_csv(path)
+    except Exception as e:
+        log(f"    ! {sym}: unreadable ({e})")
+        return None
+    if not {"open_time", "volume", "delta"} <= set(df.columns):
+        log(f"    ! {sym}: unexpected columns {list(df.columns)}")
+        return None
+    df["ts"] = pd.to_datetime(df["open_time"], unit="ms")
+    df = df.set_index("ts").sort_index()
+    out = pd.DataFrame({
+        "volume": df["volume"].resample("1D").sum(),
+        "delta": df["delta"].resample("1D").sum(),
+    }).dropna()
+    return out if len(out) >= MIN_DAYS else None
+
+
+def spot_panel(idx: pd.DatetimeIndex, coins: list[str]):
+    """Returns (SVOL, SDN, covered) reindexed onto the PERP index so every
+    matrix shares one calendar. Coins with no spot data become all-NaN
+    columns, which rank_to_weights-style guards then drop -- they do not
+    silently become zeros, because a zero divergence is a tradeable score
+    and a missing one must not be."""
+    sv, sd, covered = {}, {}, []
+    for c in coins:
+        d = load_spot_daily(c)
+        if d is None:
+            sv[c] = pd.Series(np.nan, index=idx)
+            sd[c] = pd.Series(np.nan, index=idx)
+            continue
+        sv[c] = d["volume"].reindex(idx)
+        sd[c] = d["delta"].reindex(idx)
+        covered.append(c)
+    return (pd.DataFrame(sv, columns=coins),
+            pd.DataFrame(sd, columns=coins),
+            covered)
+
+
+def build():
+    """Perp panel from book.py (unchanged), spot panel aligned to it."""
+    idx, PX, R, VOL, DN = book.panel()
+    coins = list(R.columns)
+    SVOL, SDN, covered = spot_panel(idx, coins)
+
+    # normalised flow, both tapes. Divide-by-zero -> NaN, never 0: a day with
+    # no volume has no flow reading, and pretending it is neutral flow would
+    # put that coin in the middle of the cross-section every quiet day.
+    PFN = DN / VOL.replace(0, np.nan)
+    SFN = SDN / SVOL.replace(0, np.nan)
+    return idx, PX, R, VOL, DN, SVOL, SDN, PFN, SFN, covered
+
+
+# --------------------------------------------------------------------------
+# signals
+# --------------------------------------------------------------------------
+def sig_div(SFN, PFN, k):
+    """The divergence signal. z-score each leg cross-sectionally, subtract."""
+    def f(t):
+        s = Z(SFN.iloc[t - k:t].sum(min_count=1))
+        p = Z(PFN.iloc[t - k:t].sum(min_count=1))
+        return s - p
+    return f
+
+
+def sig_spot_only(SFN, k):
+    """Control: is spot flow just a better `delta`? If this scores as well as
+    divergence, there is no divergence edge -- only a cleaner tape."""
+    return lambda t: Z(SFN.iloc[t - k:t].sum(min_count=1))
+
+
+def sig_perp_only(PFN, k):
+    """Control: reproduces the existing `delta` sleeve's construction. Any
+    divergence result has to be read against THIS, not against zero."""
+    return lambda t: Z(PFN.iloc[t - k:t].sum(min_count=1))
+
+
+def sig_disagree(SFN, PFN, k):
+    """Only score coins where the two tapes genuinely disagree in SIGN.
+    Agreement is just directional consensus, which `delta` already ranks.
+    Coins in agreement get NaN -> excluded from the cross-section."""
+    def f(t):
+        s = SFN.iloc[t - k:t].sum(min_count=1)
+        p = PFN.iloc[t - k:t].sum(min_count=1)
+        d = Z(s) - Z(p)
+        return d.where(np.sign(s) != np.sign(p))
+    return f
+
+
+# --------------------------------------------------------------------------
+# audit: the checks that would have caught the previous five bugs
+# --------------------------------------------------------------------------
+def audit() -> int:
+    log("  AUDIT -- data integrity and signal timing\n")
+    worst = 0
+
+    if SPOT is None or not os.path.isdir(SPOT):
+        log("  FAIL cannot find the spot panel. Paths tried:")
+        for p_ in _SPOT_TRIED:
+            log(f"      {p_}")
+        log("  fix: python3 -u fetch_spot.py --run"
+            "   (or set HYRO_SPOT_DATA_DIR)")
+        return 2
+
+    idx, PX, R, VOL, DN, SVOL, SDN, PFN, SFN, covered = build()
+    missing = [c for c in R.columns if c not in covered]
+
+    log(f"  spot dir   : {SPOT}")
+    log(f"  perp panel : {len(R.columns)} coins, {len(idx)} days "
+        f"({idx[0].date()} -> {idx[-1].date()})")
+    log(f"  spot cover : {len(covered)}/{len(R.columns)} coins")
+    if missing:
+        log(f"  no spot    : {', '.join(missing)}")
+        if len(covered) < 2 * 5 + 2:
+            log(f"  FAIL only {len(covered)} coins with spot -- cannot fill "
+                f"both sides of a 5-per-side cross-section")
+            worst = 2
+        elif len(covered) < 14:
+            log(f"  WARN {len(covered)} coins is a thin cross-section; a "
+                f"result here is fragile by construction")
+            worst = max(worst, 1)
+
+    # ---- 1. normalised flow must sit in [-1, 1]. Outside that range means
+    #         delta and volume came from different venues (the clean_panel bug)
+    log("")
+    for name, M in (("perp", PFN), ("spot", SFN)):
+        v = M.values[np.isfinite(M.values)]
+        if v.size == 0:
+            log(f"  FAIL {name} normalised flow is entirely NaN")
+            worst = 2
+            continue
+        lo, hi = float(v.min()), float(v.max())
+        bad = int(((v < -1.0000001) | (v > 1.0000001)).sum())
+        tag = "OK" if bad == 0 else f"FAIL {bad} values outside [-1,1]"
+        log(f"  {name} flow range [{lo:+.3f}, {hi:+.3f}]  {tag}")
+        if bad:
+            worst = 2
+
+    # ---- 2. the two tapes must not be the same series. If corr ~ 1.0 there
+    #         is no divergence to trade and the whole premise is dead.
+    log("")
+    cors = []
+    for c in covered:
+        a, b = SFN[c], PFN[c]
+        m = a.notna() & b.notna()
+        if m.sum() > 200:
+            cors.append((c, float(np.corrcoef(a[m], b[m])[0, 1]), int(m.sum())))
+    if not cors:
+        log("  FAIL no coin has 200+ overlapping spot/perp days")
+        return 2
+    vals = [c[1] for c in cors]
+    log(f"  spot-vs-perp flow correlation, per coin:")
+    log(f"    median {np.median(vals):+.3f}   "
+        f"min {min(vals):+.3f} ({min(cors, key=lambda x: x[1])[0]})   "
+        f"max {max(vals):+.3f} ({max(cors, key=lambda x: x[1])[0]})")
+    if np.median(vals) > 0.95:
+        log("  FAIL the two tapes are the same series -- nothing to diverge")
+        worst = 2
+    elif np.median(vals) > 0.85:
+        log("  WARN tapes are very similar; expect a weak residual")
+        worst = max(worst, 1)
+    else:
+        log("  OK   tapes are distinct -- there is a residual to trade")
+
+    # ---- 3. TIMING. Every signal must be blind to bar t. Feed it a panel
+    #         whose last row is poisoned and confirm the score does not move.
+    log("")
+    t = len(idx) - 1
+    builders = {
+        "div":       lambda S, P: sig_div(S, P, 3),
+        "spot_only": lambda S, P: sig_spot_only(S, 3),
+        "perp_only": lambda S, P: sig_perp_only(P, 3),
+        "disagree":  lambda S, P: sig_disagree(S, P, 3),
+    }
+    for name, mk in builders.items():
+        clean = mk(SFN, PFN)(t)
+        Sp, Pp = SFN.copy(), PFN.copy()
+        Sp.iloc[t] = 0.99          # poison bar t only
+        Pp.iloc[t] = -0.99
+        dirty = mk(Sp, Pp)(t)
+        a = clean.reindex(sorted(clean.index)).astype(float)
+        b = dirty.reindex(sorted(dirty.index)).astype(float)
+        same = np.allclose(a.fillna(-999), b.fillna(-999), atol=1e-12)
+        log(f"  {name:<10} blind to bar t: {'OK' if same else 'FAIL LOOKAHEAD'}")
+        if not same:
+            worst = 2
+
+    # ---- 4. the signal must actually fire
+    log("")
+    for name, mk in builders.items():
+        n_valid = [int(mk(SFN, PFN)(tt).notna().sum())
+                   for tt in range(60, len(idx), 50)]
+        log(f"  {name:<10} median coins scored per rebalance: "
+            f"{int(np.median(n_valid))}")
+        if np.median(n_valid) < 12:
+            log(f"             WARN under 12 -- cross-section too thin to "
+                f"fill 5 long + 5 short reliably")
+            worst = max(worst, 1)
+
+    log("")
+    log({0: "  CLEAN -- proceed to --sweep",
+         1: "  WARNINGS -- read them before trusting any Sharpe below",
+         2: "  DO NOT PROCEED -- fix the FAILs first"}[worst])
+    return worst
+
+
+# --------------------------------------------------------------------------
+# sweep
+# --------------------------------------------------------------------------
+def row(label, s, extra=""):
+    h = len(s) // 2
+    s1 = stats(s.iloc[:h])[0]
+    s2 = stats(s.iloc[h:])[0]
+    sh, ann = stats(s)
+    both = "yes" if s1 > 0 and s2 > 0 else "NO"
+    log(f"  {label:<22}{sh:>8.2f}{ann:>8.1f}%{s1:>8.2f}{s2:>8.2f}"
+        f"{both:>6}  {extra}")
+    return sh
+
+
+def _roll(M: pd.DataFrame, off: int) -> pd.DataFrame:
+    """Circular time shift. Index and columns unchanged, values rotated."""
+    return pd.DataFrame(np.roll(M.values, off, axis=0),
+                        index=M.index, columns=M.columns)
+
+
+def null_dist(R, builder, SFN, PFN, n, hold, seeds=60, seed0=0):
+    """Circular-time-shift null for ONE config.
+
+    `builder(S, P)` must return a signal function, so the same construction
+    is used for the null as for the real run -- no second implementation to
+    drift. Rolling the signal panels preserves the signal's autocorrelation
+    and cross-sectional shape, and destroys only its time alignment with
+    forward returns.
+
+    Offsets avoid small shifts, which would barely decorrelate the signal
+    from returns and so produce an optimistically HIGH null."""
+    T = len(R)
+    lo = max(30, int(0.05 * T))
+    rng = np.random.default_rng(seed0)
+    out = []
+    for _ in range(seeds):
+        off = int(rng.integers(lo, T - lo))
+        s = xs(R, builder(_roll(SFN, off), _roll(PFN, off)), n=n, hold=hold)
+        out.append(stats(s)[0])
+    return np.array(out)
+
+
+# config name -> (builder, n_per_side, hold). One table, so the sweep, the
+# null and the verdict can never be computing different things.
+def _grid():
+    g = {}
+    for k in (1, 2, 3, 5, 7):
+        for hold in (5, 7, 10):
+            g[f"div k={k} h={hold}"] = (
+                (lambda kk: (lambda S, P: sig_div(S, P, kk)))(k), 5, hold)
+    for k in (3, 5):
+        g[f"spot_only k={k}"] = (
+            (lambda kk: (lambda S, P: sig_spot_only(S, kk)))(k), 5, 7)
+        g[f"perp_only k={k}"] = (
+            (lambda kk: (lambda S, P: sig_perp_only(P, kk)))(k), 5, 7)
+        g[f"disagree k={k}"] = (
+            (lambda kk: (lambda S, P: sig_disagree(S, P, kk)))(k), 5, 7)
+    return g
+
+
+def sweep(n_null=200, panels=None, quiet=False) -> int:
+    if panels is None:
+        rc = audit()
+        if rc == 2:
+            return 2
+        panels = build()
+    idx, PX, R, VOL, DN, SVOL, SDN, PFN, SFN, covered = panels
+
+    grid = _grid()
+    if not quiet:
+        log("\n" + "=" * 78)
+        log("  SWEEP")
+        log("=" * 78)
+        log(f"  {'config':<22}{'Sharpe':>8}{'ann':>9}{'1st':>8}{'2nd':>8}"
+            f"{'both':>6}")
+
+    results, series = {}, {}
+    order = [k for k in grid if k.startswith("div")]
+    rest = [k for k in grid if not k.startswith("div")]
+    for name in order:
+        b, n, hold = grid[name]
+        series[name] = xs(R, b(SFN, PFN), n=n, hold=hold)
+        results[name] = row(name, series[name]) if not quiet \
+            else stats(series[name])[0]
+
+    if not quiet:
+        log("")
+        log("  CONTROLS -- divergence must beat BOTH single tapes, or there")
+        log("  is no divergence edge, only a cleaner tape or old `delta`.")
+    for name in rest:
+        b, n, hold = grid[name]
+        series[name] = xs(R, b(SFN, PFN), n=n, hold=hold)
+        results[name] = row(name, series[name]) if not quiet \
+            else stats(series[name])[0]
+
+    # -------- null for the WINNING config, not an arbitrary one -----------
+    best = max(results, key=results.get)
+    bsh = results[best]
+    b, n, hold = grid[best]
+
+    if not quiet:
+        log("")
+        log(f"  NULL for the winning config ({best}), {n_null} circular")
+        log(f"  time shifts. Turnover and fee drag preserved; only the")
+        log(f"  alignment with forward returns is destroyed.")
+    null = null_dist(R, b, SFN, PFN, n, hold, seeds=n_null)
+
+    n_cfg = len(results)
+
+    # ---- p-values. Two estimators, because each one alone misleads here.
+    #
+    # Empirical: (1 + #{null >= real}) / (1 + n). The +1s are not cosmetic --
+    # a plain mean() returns p=0.000 when no null draw beats the real value,
+    # and a finite permutation test can never justify p=0. That exact bug let
+    # a NOISE config through this verdict during development (it scored +0.89
+    # against a null of -0.26+-0.62 with 0 of 40 draws above, printing
+    # p=0.000); only the both-halves rule caught it.
+    #
+    # The empirical estimator's floor is 1/(1+n), so with n=200 the smallest
+    # Bonferroni-corrected p it can express is 21/201 = 0.10 -- too coarse to
+    # ever clear 0.05. Resolving that empirically needs n >~ n_cfg/0.05 = 420+
+    # draws. So the verdict uses a Gaussian tail fitted to the null, and the
+    # empirical p is reported alongside as a check ON THAT ASSUMPTION: if the
+    # two disagree badly, the null is not Gaussian and the Gaussian p is void.
+    n_above = int((null >= bsh).sum())
+    p_emp = (1.0 + n_above) / (1.0 + len(null))
+    p_emp_floor = 1.0 / (1.0 + len(null))
+    sd = float(null.std(ddof=1))
+    z = (bsh - float(null.mean())) / sd if sd > 0 else 0.0
+    # normal survival function without scipy
+    from math import erfc, sqrt
+    p_gauss = 0.5 * erfc(z / sqrt(2.0))
+
+    p_adj = min(1.0, p_gauss * n_cfg)
+    p_adj_emp = min(1.0, p_emp * n_cfg)
+    e_max = float(np.percentile(null, 100 * (1 - 1.0 / n_cfg))) \
+        if n_cfg > 1 else float(null.max())
+
+    if not quiet:
+        log(f"    null mean {null.mean():+.2f}  std {sd:.2f}  "
+            f"min {null.min():+.2f}  max {null.max():+.2f}  (n={len(null)})")
+        log(f"    real {bsh:+.2f}   z vs null {z:+.2f}")
+        log(f"    p Gaussian  {p_gauss:.4f}  -> Bonferroni x{n_cfg} "
+            f"{p_adj:.3f}   <- verdict uses this")
+        log(f"    p empirical {p_emp:.4f}  -> Bonferroni x{n_cfg} "
+            f"{p_adj_emp:.3f}   ({n_above}/{len(null)} draws >= real)")
+        if n_above == 0:
+            log(f"    NOTE empirical p is AT ITS FLOOR ({p_emp_floor:.4f}); it"
+                f" cannot resolve further.")
+            log(f"         for an empirical verdict re-run with "
+                f"--nulls {int(np.ceil(n_cfg / 0.05))}")
+        if p_adj_emp <= 0.05 and p_adj > 0.05:
+            log(f"    NOTE the two estimators DISAGREE -- treat the Gaussian "
+                f"p as void and trust the empirical one")
+        log(f"    E[max of {n_cfg} nulls] ~ {e_max:+.2f}")
+
+        log("")
+        log("=" * 78)
+        log(f"  best config: {best}   Sharpe {bsh:.2f}")
+        h = len(series[best]) // 2
+        s1 = stats(series[best].iloc[:h])[0]
+        s2 = stats(series[best].iloc[h:])[0]
+        if p_adj > 0.05:
+            log(f"  VERDICT: NOISE.")
+            log(f"  After correcting for the {n_cfg} configs tried, p={p_adj:.2f}."
+                f" Do not wire this sleeve.")
+        elif not (s1 > 0 and s2 > 0):
+            log(f"  VERDICT: REJECT -- halves {s1:.2f} / {s2:.2f}.")
+            log(f"  Significant overall but not in both halves, which is the")
+            log(f"  signature of one regime carrying the whole result.")
+        else:
+            log(f"  VERDICT: survives. p(Bonferroni)={p_adj:.3f}, "
+                f"halves {s1:.2f} / {s2:.2f}.")
+            log(f"  STILL REQUIRED before wiring:")
+            log(f"    1. --corr   (< 0.3 against all nine live sleeves)")
+            log(f"    2. beat spot_only AND perp_only above, or it is not a")
+            log(f"       divergence edge -- just a cleaner or older tape")
+            log(f"    3. re-run on a coin set chosen out of sample")
+        log("=" * 78)
+
+    return 0, best, bsh, p_adj, series, null
+
+
+# --------------------------------------------------------------------------
+# selftest: the verdict must reject a panel with no edge in it
+# --------------------------------------------------------------------------
+def _synth(days, seed, edge=0.0):
+    """Synthetic panel. `edge` plants a REAL relationship: next-day return
+    is partly driven by today's spot-minus-perp flow divergence, which is
+    exactly the hypothesis under test. edge=0 is pure noise."""
+    rng = np.random.default_rng(seed)
+    coins = CORE24[:]
+    idx = pd.date_range("2023-01-01", periods=days, freq="1D")
+    C = len(coins)
+
+    def persist(a, rho=0.5):
+        out = np.zeros_like(a)
+        out[0] = a[0]
+        for i in range(1, len(a)):
+            out[i] = rho * out[i - 1] + np.sqrt(1 - rho ** 2) * a[i]
+        return out
+
+    pf = np.clip(persist(rng.normal(0, .3, (days, C))), -1, 1)
+    sf = np.clip(persist(rng.normal(0, .3, (days, C))), -1, 1)
+
+    # returns: idiosyncratic noise + (optionally) a real signal component.
+    # The signal uses day t's divergence to drive day t+1's return, so a
+    # harness reading .iloc[t-k:t] and earning R[t] can legitimately find it.
+    rr = rng.normal(0, 0.03, (days, C))
+    if edge:
+        div = sf - pf
+        rr[1:] += edge * div[:-1]
+
+    PX = pd.DataFrame(100 * np.exp(np.cumsum(rr, axis=0)),
+                      index=idx, columns=coins)
+    R = PX.pct_change()
+    PFN = pd.DataFrame(pf, index=idx, columns=coins)
+    SFN = pd.DataFrame(sf, index=idx, columns=coins)
+    VOL = pd.DataFrame(1.0, index=idx, columns=coins)
+    return (idx, PX, R, VOL, PFN * VOL, VOL, SFN * VOL, PFN, SFN, coins)
+
+
+def _verdict(best, bsh, p_adj, series):
+    h = len(series[best]) // 2
+    s1 = stats(series[best].iloc[:h])[0]
+    s2 = stats(series[best].iloc[h:])[0]
+    return (p_adj <= 0.05 and s1 > 0 and s2 > 0), s1, s2
+
+
+def selftest(days=700, n_null=200, seeds=(12345, 777, 20260101)) -> int:
+    """Two-sided validation of the verdict logic.
+
+    NEGATIVE control: pure-noise panels must be REJECTED. A harness that
+    cannot reject noise manufactures confidence, which is worse than having
+    no harness. An earlier version of this file failed exactly this test.
+
+    POSITIVE control: a panel with a real planted divergence edge must be
+    ACCEPTED. A harness that rejects everything is equally useless -- it
+    would have thrown away the real sleeve along with the seven bad ones.
+
+    Both must pass across several seeds, because a single pass is luck.
+    """
+    log(f"  SELFTEST -- verdict logic, {days}d panels, {len(seeds)} seeds\n")
+    fails = []
+
+    log("  NEGATIVE control: pure noise, must be rejected")
+    for sd in seeds:
+        _, best, bsh, p_adj, series, null = sweep(
+            n_null=n_null, panels=_synth(days, sd, edge=0.0), quiet=True)
+        accepted, s1, s2 = _verdict(best, bsh, p_adj, series)
+        log(f"    seed {sd:<9} best {best:<18} Sharpe {bsh:+.2f}  "
+            f"null {null.mean():+.2f}+-{null.std():.2f}  "
+            f"p {p_adj:.3f}  halves {s1:+.2f}/{s2:+.2f}  "
+            f"-> {'ACCEPTED (BAD)' if accepted else 'rejected (good)'}")
+        if accepted:
+            fails.append(f"noise seed {sd} was accepted")
+
+    log("")
+    log("  POSITIVE control: real planted edge, must be accepted")
+    for sd in seeds:
+        _, best, bsh, p_adj, series, null = sweep(
+            n_null=n_null, panels=_synth(days, sd, edge=0.02), quiet=True)
+        accepted, s1, s2 = _verdict(best, bsh, p_adj, series)
+        log(f"    seed {sd:<9} best {best:<18} Sharpe {bsh:+.2f}  "
+            f"null {null.mean():+.2f}+-{null.std():.2f}  "
+            f"p {p_adj:.3f}  halves {s1:+.2f}/{s2:+.2f}  "
+            f"-> {'accepted (good)' if accepted else 'REJECTED (BAD)'}")
+        if not accepted:
+            fails.append(f"planted edge seed {sd} was rejected")
+
+    log("")
+    if not fails:
+        log("  PASS -- rejects noise, detects a real edge. --sweep is usable.")
+        return 0
+    for f in fails:
+        log(f"  FAIL: {f}")
+    log("  Do not trust --sweep until this passes.")
+    return 2
+
+
+# --------------------------------------------------------------------------
+# correlation against the live book
+# --------------------------------------------------------------------------
+def corr(k=3, hold=7) -> int:
+    idx, PX, R, VOL, DN, SVOL, SDN, PFN, SFN, covered = build()
+    spot = xs(R, sig_div(SFN, PFN, k), n=5, hold=hold)
+
+    log(f"  building the live sleeves from book.py for comparison...")
+    sl, _, _, _ = book.build()
+    try:
+        import sr2
+        sl["sr"], _ = sr2.run(6, "break_res", oi_filter=True)
+    except Exception as e:
+        log(f"  ! could not build sr sleeve: {e}")
+
+    sl["spot_div"] = spot
+    common = None
+    for v in sl.values():
+        common = v.index if common is None else common.intersection(v.index)
+    S = {kk: v.reindex(common).fillna(0.0) for kk, v in sl.items()}
+
+    log(f"\n  {len(common)} shared days "
+        f"({common[0].date()} -> {common[-1].date()})\n")
+    log("  CORRELATION of spot_div against each sleeve")
+    worst_c = 0.0
+    for kk, v in S.items():
+        if kk == "spot_div":
+            continue
+        c = float(np.corrcoef(S["spot_div"], v)[0, 1])
+        flag = "  <-- too high" if abs(c) >= 0.30 else ""
+        worst_c = max(worst_c, abs(c))
+        log(f"    {kk:<12}{c:>+8.2f}{flag}")
+
+    log("")
+    if worst_c < 0.30:
+        log(f"  OK  max |corr| {worst_c:.2f} -- genuinely uncorrelated, which")
+        log(f"      is more than any of the seven rejected candidates managed")
+    else:
+        log(f"  max |corr| {worst_c:.2f} -- not independent enough to add risk")
+    return 0
+
+
+if __name__ == "__main__":
+    if "--audit" in sys.argv:
+        raise SystemExit(audit())
+    nn = 200
+    if "--nulls" in sys.argv:
+        try:
+            nn = int(sys.argv[sys.argv.index("--nulls") + 1])
+        except (IndexError, ValueError):
+            log("  ! --nulls needs an integer")
+            raise SystemExit(2)
+    if "--selftest" in sys.argv:
+        raise SystemExit(selftest(n_null=nn))
+    if "--sweep" in sys.argv:
+        raise SystemExit(sweep(n_null=nn)[0])
+    if "--corr" in sys.argv:
+        raise SystemExit(corr())
+    log(__doc__)
+    log("  pick one: --audit | --selftest | --sweep | --corr")
+    raise SystemExit(0)

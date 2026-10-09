@@ -90,8 +90,37 @@ import urllib.request
 BASE = "https://api.binance.com/api/v3/klines"
 INFO = "https://api.binance.com/api/v3/exchangeInfo"
 
-OUT = os.path.expanduser("~/spot_data")
-PERP = os.path.expanduser("~/taker_data")          # the series we pair against
+def resolve_dir(env_var: str, name: str, must_exist: bool):
+    """Find a data directory the SAME way book.py does: env var, then cwd,
+    then $HOME, then the /tmp/hyro fallback.
+
+    This exists because hardcoding one path is a bug this project has already
+    paid for: every sleeve once raised FileNotFoundError on the server because
+    hourly_sim/sr2/fvg had `/tmp/hyro` baked in. Returns the first candidate
+    that exists; if none do and must_exist, returns None along with the list
+    of paths tried so the caller can PRINT them instead of failing silently.
+    """
+    tried = []
+    env = os.environ.get(env_var)
+    if env:
+        tried.append(env)
+        if os.path.isdir(env):
+            return env, tried
+    for cand in (name,
+                 os.path.expanduser(f"~/{name}"),
+                 os.path.expanduser(f"~/bot_hyrotrader_v1/{name}"),
+                 f"/tmp/hyro/{name}"):
+        tried.append(cand)
+        if os.path.isdir(cand):
+            return cand, tried
+    if not must_exist:
+        # writing: default to $HOME, created on first write
+        return os.path.expanduser(f"~/{name}"), tried
+    return None, tried
+
+
+OUT, _OUT_TRIED = resolve_dir("HYRO_SPOT_DATA_DIR", "spot_data", False)
+PERP, _PERP_TRIED = resolve_dir("HYRO_TAKER_DATA_DIR", "taker_data", True)
 
 YEARS = 3.6                                        # match the perp panel
 PER_CALL = 1000                                    # spot endpoint caps at 1000
@@ -181,13 +210,21 @@ def coins() -> list[str]:
     counterpart to diff against. BTC included here (unlike fetch_taker, which
     excludes it as the market factor) because spot-vs-perp divergence on BTC
     is itself a market-wide signal worth having."""
-    if not os.path.isdir(PERP):
-        log(f"  ! {PERP} does not exist -- run fetch_taker.py first")
-        raise SystemExit(1)
+    if PERP is None:
+        log("  ! cannot find the perp panel (taker_data). Paths tried:")
+        for p in _PERP_TRIED:
+            log(f"      {p}")
+        log("  fix: run fetch_taker.py first, or point HYRO_TAKER_DATA_DIR")
+        log("       at the directory holding <COIN>_1h.csv")
+        raise SystemExit(2)
     names = {
         os.path.basename(f).replace("_1h.csv", "")
         for f in glob.glob(f"{PERP}/*_1h.csv")
     }
+    if not names:
+        log(f"  ! {PERP} exists but holds no <COIN>_1h.csv files")
+        log(f"    contents: {sorted(os.listdir(PERP))[:10]}")
+        raise SystemExit(2)
     return sorted(names)
 
 
@@ -269,9 +306,11 @@ def write(coin: str, rows: dict[int, list]) -> tuple[int, int]:
 def verify() -> int:
     """Audit everything already in ~/spot_data. Exit 0 clean, 1 warnings,
     2 do-not-use."""
+    log(f"  spot dir : {OUT}")
+    log(f"  perp dir : {PERP}")
     files = sorted(glob.glob(f"{OUT}/*_spot_1h.csv"))
     if not files:
-        log(f"  nothing in {OUT}")
+        log(f"  nothing in {OUT} -- run --run first")
         return 2
 
     log(f"  auditing {len(files)} spot files against {PERP}\n")
@@ -370,6 +409,8 @@ def main() -> int:
             continue
         todo.append(c)
 
+    log(f"  perp dir:        {PERP}")
+    log(f"  spot dir:        {OUT}")
     log(f"  perp panel:      {len(want)} coins")
     log(f"  already fetched: {len(have)}")
     log(f"  no spot pair:    {len(no_spot)}"
