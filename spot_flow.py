@@ -854,40 +854,68 @@ def selftest(days=700, n_null=60, seeds=(12345, 777, 20260101)) -> int:
 def corr(k=3, hold=7) -> int:
     (idx, PX, R, VOL, DN, SVOL, SDN, PFN, SFN, covered,
      FUND, fcov) = build()
-    spot = xs(R, sig_div(SFN, PFN, k), n=5, hold=hold)
+    # Compare the sleeve that actually scored, not the dead divergence one.
+    # The sweep found every div config flat-to-negative while spot_only k=3
+    # scored 1.65, so correlating `div` against the book would be answering
+    # a question nobody is asking.
+    cand = {
+        "spot_only": xs(R, sig_spot_only(SFN, k), n=5, hold=hold),
+        "spot_dm": xs(R, sig_spot_demean(SFN, k), n=5, hold=hold),
+        "spot_div": xs(R, sig_div(SFN, PFN, k), n=5, hold=hold),
+    }
 
     log(f"  building the live sleeves from book.py for comparison...")
     sl, _, _, _ = book.build()
     try:
         import sr2
-        sl["sr"], _ = sr2.run(6, "break_res", oi_filter=True)
+        got = sr2.run(6, "break_res", oi_filter=True)
+        if got is not None:
+            sl["sr"] = got[0]
     except Exception as e:
         log(f"  ! could not build sr sleeve: {e}")
 
-    sl["spot_div"] = spot
+    # Drop anything that is not a usable series. sr2.run() can return None
+    # WITHOUT raising, which slipped past the try/except above and crashed
+    # on v.index -- a failed build must narrow the comparison, not kill it.
+    bad = [kk for kk, v in sl.items()
+           if not isinstance(v, pd.Series) or v.dropna().empty]
+    for kk in bad:
+        log(f"  ! sleeve {kk!r} unavailable ({type(sl[kk]).__name__}) "
+            f"-- excluded from the comparison")
+        sl.pop(kk)
+    if not sl:
+        log("  FAIL no live sleeve could be built -- nothing to compare against")
+        return 2
+
+    sl.update(cand)
     common = None
     for v in sl.values():
         common = v.index if common is None else common.intersection(v.index)
+    if common is None or len(common) < 100:
+        log(f"  FAIL only {0 if common is None else len(common)} shared days")
+        return 2
     S = {kk: v.reindex(common).fillna(0.0) for kk, v in sl.items()}
 
     log(f"\n  {len(common)} shared days "
         f"({common[0].date()} -> {common[-1].date()})\n")
-    log("  CORRELATION of spot_div against each sleeve")
-    worst_c = 0.0
-    for kk, v in S.items():
-        if kk == "spot_div":
-            continue
-        c = float(np.corrcoef(S["spot_div"], v)[0, 1])
-        flag = "  <-- too high" if abs(c) >= 0.30 else ""
-        worst_c = max(worst_c, abs(c))
-        log(f"    {kk:<12}{c:>+8.2f}{flag}")
+    live = [kk for kk in S if kk not in cand]
+    log("  CORRELATION of each spot candidate against each live sleeve")
+    log("  " + " " * 12 + "".join(f"{kk[:9]:>10}" for kk in live))
+    for cname in cand:
+        row_ = []
+        worst_c = 0.0
+        for kk in live:
+            c = float(np.corrcoef(S[cname], S[kk])[0, 1])
+            worst_c = max(worst_c, abs(c))
+            row_.append(f"{c:>+10.2f}")
+        flag = "" if worst_c < 0.30 else f"   max |r|={worst_c:.2f} TOO HIGH"
+        log(f"    {cname:<10}" + "".join(row_) + flag)
 
     log("")
-    if worst_c < 0.30:
-        log(f"  OK  max |corr| {worst_c:.2f} -- genuinely uncorrelated, which")
-        log(f"      is more than any of the seven rejected candidates managed")
-    else:
-        log(f"  max |corr| {worst_c:.2f} -- not independent enough to add risk")
+    log("  A candidate needs max |r| < 0.30 against every live sleeve to add")
+    log("  diversification. Note that `spot_only` is the same construction as")
+    log("  `delta` on a different tape, so a high correlation there is")
+    log("  expected and means it is a REPLACEMENT, not a tenth sleeve.")
     return 0
 
 
