@@ -544,27 +544,62 @@ def sweep(n_null=200, panels=None, quiet=False) -> int:
         log(f"  {'config':<22}{'Sharpe':>8}{'ann':>9}{'1st':>8}{'2nd':>8}"
             f"{'both':>6}")
 
-    results, series = {}, {}
+    results, series, eligible = {}, {}, {}
     order = [k for k in grid if k.startswith("div")]
     rest = [k for k in grid if not k.startswith("div")]
-    for name in order:
+
+    def run_one(name):
         b, n, hold = grid[name]
-        series[name] = xs(R, b(SFN, PFN, FUND), n=n, hold=hold)
-        results[name] = row(name, series[name]) if not quiet \
+        sig = b(SFN, PFN, FUND)
+        # How many coins does this config actually score? book.xs needs
+        # 2n+2 valid names or it SKIPS the rebalance and holds the previous
+        # position. A config scoring fewer is not running the strategy on
+        # the label -- it is a low-turnover stale-carry variant whose Sharpe
+        # is not comparable to the others, and must not be crowned winner.
+        # (`disagree` scores a median of 8 of 24 on the real panel.)
+        need = 2 * n + 2
+        scored = [int(sig(tt).notna().sum())
+                  for tt in range(60, len(R), 25)]
+        med = float(np.median(scored)) if scored else 0.0
+        frac_ok = float(np.mean([x >= need for x in scored])) if scored else 0.0
+        series[name] = xs(R, sig, n=n, hold=hold)
+        eligible[name] = (frac_ok >= 0.80, med, frac_ok, need)
+        tag = "" if frac_ok >= 0.80 else \
+            f"<- SKIPS {100*(1-frac_ok):.0f}% of rebalances (scores {med:.0f}/{need})"
+        results[name] = row(name, series[name], tag) if not quiet \
             else stats(series[name])[0]
+
+    for name in order:
+        run_one(name)
 
     if not quiet:
         log("")
         log("  CONTROLS -- divergence must beat BOTH single tapes, or there")
         log("  is no divergence edge, only a cleaner tape or old `delta`.")
     for name in rest:
-        b, n, hold = grid[name]
-        series[name] = xs(R, b(SFN, PFN, FUND), n=n, hold=hold)
-        results[name] = row(name, series[name]) if not quiet \
-            else stats(series[name])[0]
+        run_one(name)
 
     # -------- null for the WINNING config, not an arbitrary one -----------
-    best = max(results, key=results.get)
+    # Winner chosen only among configs that actually execute their
+    # rebalances. A disqualified config is still shown above, flagged.
+    runnable = [k for k in results if eligible[k][0]]
+    dq = [k for k in results if not eligible[k][0]]
+    if not runnable:
+        if not quiet:
+            log("")
+            log("  ABORT: every config skips >20% of its rebalances. There is")
+            log("  no strategy here to measure -- the cross-section is too")
+            log("  thin for n=5 per side. Lower n or widen the universe.")
+        return 2, None, 0.0, 1.0, series, np.array([0.0])
+    if dq and not quiet:
+        log("")
+        log(f"  DISQUALIFIED from winning (skip >20% of rebalances, so they")
+        log(f"  hold stale positions instead of the stated hold):")
+        for k in dq:
+            _, med, frac, need = eligible[k]
+            log(f"    {k:<22} scores {med:.0f}/{need} needed, "
+                f"executes {100*frac:.0f}%")
+    best = max(runnable, key=results.get)
     bsh = results[best]
     b, n, hold = grid[best]
 
@@ -703,7 +738,7 @@ def _verdict(best, bsh, p_adj, series):
     return (p_adj <= 0.05 and s1 > 0 and s2 > 0), s1, s2
 
 
-def selftest(days=700, n_null=200, seeds=(12345, 777, 20260101)) -> int:
+def selftest(days=700, n_null=60, seeds=(12345, 777, 20260101)) -> int:
     """Two-sided validation of the verdict logic.
 
     NEGATIVE control: pure-noise panels must be REJECTED. A harness that
@@ -715,6 +750,11 @@ def selftest(days=700, n_null=200, seeds=(12345, 777, 20260101)) -> int:
     would have thrown away the real sleeve along with the seven bad ones.
 
     Both must pass across several seeds, because a single pass is luck.
+
+    n_null is 60 here, not the 200 --sweep uses. This test checks that the
+    verdict LOGIC separates signal from noise, which 60 draws resolve fine;
+    it does not need a precise p. At 200 x 6 panels this would be an hour of
+    compute on a 1-vCPU box for no extra information.
     """
     log(f"  SELFTEST -- verdict logic, {days}d panels, {len(seeds)} seeds\n")
     fails = []
