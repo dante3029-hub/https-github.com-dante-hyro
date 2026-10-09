@@ -837,6 +837,146 @@ def corr(k=3, hold=7) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------
+# --diag : is the winner a TIMING signal, or a static tilt that paid?
+# --------------------------------------------------------------------------
+# The failure mode this is built to catch: spot books are thin for alts, so
+# delta/volume runs to extremes on illiquid names, and the SAME names land in
+# the top/bottom 5 every rebalance. That is not a flow signal -- it is a fixed
+# long/short portfolio that happened to work, which is how ZEC's 2.19x risk
+# share and "how did RATS make the cut" happened.
+#
+# This forks xs()'s weight loop to collect the weights, which this file
+# otherwise warns against. The fork is therefore PROVEN against xs(): its
+# reconstructed PnL must match xs() to 1e-12 or the diagnostic refuses to
+# report. Fork for introspection, never for a performance number.
+
+def _collect(R, sig, n, hold):
+    """Byte-for-byte replica of book.xs's loop, additionally recording the
+    weight vector at every executed rebalance."""
+    idx = R.index
+    acc = np.zeros(len(idx))
+    hist = []                                  # (phase, t, weights)
+    for ph in range(hold):
+        wp = pd.Series(0.0, index=R.columns)
+        out = np.zeros(len(idx))
+        for t in range(60, len(idx)):
+            r = R.iloc[t].fillna(0.0)
+            carry = float((wp * r).sum())
+            if (t - ph) % hold != 0:
+                out[t] = carry
+                continue
+            s = sig(t)
+            v = s.dropna()
+            if len(v) < 2 * n + 2:
+                out[t] = carry
+                continue
+            o = v.sort_values()
+            w = pd.Series(0.0, index=R.columns)
+            w[o.index[-n:]] = 0.5 / n
+            w[o.index[:n]] = -0.5 / n
+            out[t] = float((w * r).sum()) - float((w - wp).abs().sum()) * FEE
+            wp = w
+            hist.append((ph, t, w.copy()))
+        acc += out
+    return pd.Series(acc[60:] / hold, index=idx[60:]), hist
+
+
+def diag(cfgname=None) -> int:
+    (idx, PX, R, VOL, DN, SVOL, SDN, PFN, SFN, covered,
+     FUND, fcov) = build()
+    grid = _grid(have_funding=bool(fcov))
+    if cfgname is None:
+        cfgname = "spot_only k=3"
+    if cfgname not in grid:
+        log(f"  unknown config {cfgname!r}")
+        log(f"  choose one of: {', '.join(sorted(grid))}")
+        return 2
+
+    b, n, hold = grid[cfgname]
+    sig = b(SFN, PFN, FUND)
+    log(f"  DIAGNOSTIC for {cfgname}  (n={n} per side, hold={hold})\n")
+
+    mine, hist = _collect(R, sig, n, hold)
+    ref = xs(R, sig, n=n, hold=hold)
+    gap = float((mine - ref).abs().max())
+    if gap > 1e-12:
+        log(f"  ABORT: the instrumented loop does not reproduce book.xs "
+            f"(max diff {gap:.2e}).")
+        log(f"  Every number below would be measuring a different strategy.")
+        return 2
+    log(f"  fork matches book.xs exactly (max diff {gap:.1e})  OK")
+    sh, ann = stats(ref)
+    log(f"  Sharpe {sh:.2f}   ann {ann:.1f}%   {len(hist)} rebalances\n")
+
+    # ---- 1. persistence: is it the same names every time? ----------------
+    W = pd.DataFrame([h[2] for h in hist])
+    nreb = len(W)
+    pct_long = (W > 0).mean() * 100
+    pct_short = (W < 0).mean() * 100
+    held = pct_long + pct_short
+    log("  POSITION PERSISTENCE -- % of rebalances each coin is held")
+    log(f"  {'coin':<10}{'long%':>8}{'short%':>8}{'any%':>8}")
+    for c in held.sort_values(ascending=False).index[:12]:
+        log(f"  {c:<10}{pct_long[c]:>8.1f}{pct_short[c]:>8.1f}"
+            f"{held[c]:>8.1f}")
+    log(f"\n  a coin held >70% of the time on ONE side is a static tilt,")
+    log(f"  not a timing signal. {int((pct_long>70).sum())} coins are "
+        f"long >70%, {int((pct_short>70).sum())} short >70%.")
+    log(f"  mean coins used at all: {int((held>0).sum())} of {len(held)}")
+
+    # ---- 2. THE KILLER TEST: fixed portfolio of the average weights ------
+    # If a static book earns most of the Sharpe, the signal is not timing.
+    wbar = W.mean()
+    static = (R.fillna(0.0) * wbar).sum(axis=1).reindex(ref.index).fillna(0.0)
+    s_sh, s_ann = stats(static)
+    log("")
+    log("  STATIC-TILT TEST -- hold the AVERAGE weight vector, never retrade")
+    log(f"    dynamic signal   Sharpe {sh:>6.2f}   ann {ann:>6.1f}%")
+    log(f"    static average   Sharpe {s_sh:>6.2f}   ann {s_ann:>6.1f}%")
+    if sh > 0:
+        share = 100.0 * max(s_sh, 0.0) / sh
+        log(f"    the static book reproduces {share:.0f}% of the Sharpe")
+        if share > 70:
+            log(f"    VERDICT: this is a STATIC TILT, not a flow signal. The")
+            log(f"    edge is which coins it is permanently long/short, which")
+            log(f"    is a bet on 23 specific coins over one 3.7-year sample.")
+        elif share > 40:
+            log(f"    VERDICT: MIXED -- a large part is a static tilt. Treat")
+            log(f"    the timing component as the real, smaller result.")
+        else:
+            log(f"    VERDICT: mostly genuine timing -- the static book does "
+                f"not explain it.")
+
+    # ---- 3. leave-one-coin-out: is one coin carrying it? -----------------
+    log("")
+    log("  LEAVE-ONE-COIN-OUT -- Sharpe with each coin dropped entirely")
+    base = sh
+    rows = []
+    for c in list(R.columns):
+        keep = [x for x in R.columns if x != c]
+        sig_c = b(SFN[keep], PFN[keep], FUND[keep])
+        s_c = xs(R[keep], sig_c, n=n, hold=hold)
+        rows.append((c, stats(s_c)[0]))
+    rows.sort(key=lambda x: x[1])
+    log(f"  {'dropped':<10}{'Sharpe':>8}{'delta':>8}")
+    for i_, (c, v) in enumerate(rows[:6]):
+        tag = "   <- most damaging to drop" if i_ == 0 else ""
+        log(f"  {c:<10}{v:>8.2f}{v-base:>+8.2f}{tag}")
+    log(f"  {'(none)':<10}{base:>8.2f}{0.0:>+8.2f}")
+    for c, v in rows[-3:]:
+        log(f"  {c:<10}{v:>8.2f}{v-base:>+8.2f}")
+    worst_drop = base - rows[0][1]
+    log("")
+    if worst_drop > 0.5:
+        log(f"  CONCENTRATED: dropping {rows[0][0]} costs {worst_drop:.2f}"
+            f" Sharpe. One coin is carrying a large share of the result.")
+    else:
+        log(f"  BROAD: no single coin is worth more than {worst_drop:.2f}"
+            f" Sharpe. The result does not rest on one name.")
+    return 0
+
+
 if __name__ == "__main__":
     if "--audit" in sys.argv:
         raise SystemExit(audit())
@@ -853,6 +993,11 @@ if __name__ == "__main__":
         raise SystemExit(sweep(n_null=nn)[0])
     if "--corr" in sys.argv:
         raise SystemExit(corr())
+    if "--diag" in sys.argv:
+        i = sys.argv.index("--diag")
+        cfg = sys.argv[i + 1] if len(sys.argv) > i + 1 \
+            and not sys.argv[i + 1].startswith("--") else None
+        raise SystemExit(diag(cfg))
     log(__doc__)
-    log("  pick one: --audit | --selftest | --sweep | --corr")
+    log("  pick one: --audit | --selftest | --sweep | --corr | --diag")
     raise SystemExit(0)
