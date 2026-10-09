@@ -104,6 +104,10 @@ from book import CORE24, FEE, stats, xs
 from fetch_spot import resolve_dir
 
 SPOT, _SPOT_TRIED = resolve_dir("HYRO_SPOT_DATA_DIR", "spot_data", True)
+# Funding is OPTIONAL: without it the confluence variants are skipped and
+# the plain divergence sweep still runs. Missing data must narrow the test,
+# never silently change what is being tested.
+FUND_DIR, _FUND_TRIED = resolve_dir("HYRO_FUNDING_DATA_DIR", "funding_data", True)
 
 MIN_DAYS = 400          # same floor book.panel() uses
 Z = lambda x: (x - x.mean()) / x.std() if x.std() > 0 else x * 0.0
@@ -140,6 +144,38 @@ def load_spot_daily(sym: str) -> pd.DataFrame | None:
     return out if len(out) >= MIN_DAYS else None
 
 
+def load_funding_daily(sym: str, idx: pd.DatetimeIndex) -> pd.Series | None:
+    """Funding settles every 8h -> 3 observations a day, so the daily
+    aggregate is their SUM (the actual cost of holding that day), not their
+    mean. Written by fetch_funding.py as <COIN>_funding.csv: ts,rate."""
+    if FUND_DIR is None:
+        return None
+    path = f"{FUND_DIR}/{sym}_funding.csv"
+    if not os.path.exists(path):
+        return None
+    try:
+        df = pd.read_csv(path)
+    except Exception:
+        return None
+    if not {"ts", "rate"} <= set(df.columns):
+        return None
+    df["t"] = pd.to_datetime(df["ts"], unit="ms")
+    s = df.set_index("t").sort_index()["rate"].resample("1D").sum()
+    return s.reindex(idx)
+
+
+def funding_panel(idx: pd.DatetimeIndex, coins: list[str]):
+    out, covered = {}, []
+    for c in coins:
+        s = load_funding_daily(c, idx)
+        if s is None or s.notna().sum() < MIN_DAYS:
+            out[c] = pd.Series(np.nan, index=idx)
+            continue
+        out[c] = s
+        covered.append(c)
+    return pd.DataFrame(out, columns=coins), covered
+
+
 def spot_panel(idx: pd.DatetimeIndex, coins: list[str]):
     """Returns (SVOL, SDN, covered) reindexed onto the PERP index so every
     matrix shares one calendar. Coins with no spot data become all-NaN
@@ -166,13 +202,14 @@ def build():
     idx, PX, R, VOL, DN = book.panel()
     coins = list(R.columns)
     SVOL, SDN, covered = spot_panel(idx, coins)
+    FUND, fcov = funding_panel(idx, coins)
 
     # normalised flow, both tapes. Divide-by-zero -> NaN, never 0: a day with
     # no volume has no flow reading, and pretending it is neutral flow would
     # put that coin in the middle of the cross-section every quiet day.
     PFN = DN / VOL.replace(0, np.nan)
     SFN = SDN / SVOL.replace(0, np.nan)
-    return idx, PX, R, VOL, DN, SVOL, SDN, PFN, SFN, covered
+    return (idx, PX, R, VOL, DN, SVOL, SDN, PFN, SFN, covered, FUND, fcov)
 
 
 # --------------------------------------------------------------------------
@@ -197,6 +234,72 @@ def sig_perp_only(PFN, k):
     """Control: reproduces the existing `delta` sleeve's construction. Any
     divergence result has to be read against THIS, not against zero."""
     return lambda t: Z(PFN.iloc[t - k:t].sum(min_count=1))
+
+
+# --------------------------------------------------------------------------
+# FUNDING-CONDITIONED VARIANTS -- a PRE-REGISTERED grid, not a free search
+# --------------------------------------------------------------------------
+# The plain divergence above throws away the most informative fact: which
+# side is CROWDED and paying to stay there. Funding is exactly that.
+#
+#   spot selling + POSITIVE funding -> holders distributing into leveraged
+#                                      longs who are paying to hold. Short.
+#   spot buying  + NEGATIVE funding -> cash accumulating while shorts pay
+#                                      to stay short. Long.
+#
+# Sign convention: positive funding = longs pay shorts. So a LONG candidate
+# wants high spot flow and LOW (negative) funding, hence `- z(funding)`
+# everywhere below.
+#
+# DISCIPLINE: exactly three variants x two lookbacks = six configs, fixed
+# before the data arrived. Confluence multiplies the search space, and the
+# measured null says best-of-21 reaches +1.1 Sharpe on pure noise; a free
+# search over spot x funding x OI x lookback x hold would push that past
+# 1.8 and make any result meaningless. Every config here is counted in the
+# Bonferroni correction.
+#
+# CONTEXT YOU SHOULD NOT FORGET: funding already FAILED standalone in both
+# directions (fade and momentum both lose; costs dominate). A conditioning
+# variable does not need standalone directional edge -- that is a real
+# distinction -- but this is not a strong starting position.
+
+
+def sig_sfund_add(SFN, FUND, k):
+    """Additive confluence: spot flow plus crowding. Keeps the full
+    cross-section, so nothing is thrown away."""
+    def f(t):
+        s = Z(SFN.iloc[t - k:t].sum(min_count=1))
+        fu = Z(FUND.iloc[t - k:t].sum(min_count=1))
+        return s - fu
+    return f
+
+
+def sig_sfund_div(SFN, PFN, FUND, k):
+    """All three tapes: spot-vs-perp divergence, plus crowding."""
+    def f(t):
+        s = Z(SFN.iloc[t - k:t].sum(min_count=1))
+        p = Z(PFN.iloc[t - k:t].sum(min_count=1))
+        fu = Z(FUND.iloc[t - k:t].sum(min_count=1))
+        return (s - p) - fu
+    return f
+
+
+def sig_sfund_mask(SFN, FUND, k):
+    """Dante's version, literally: score ONLY the coins where spot flow and
+    funding genuinely oppose each other -- spot selling into positive
+    funding, or spot buying into negative funding. Coins without that
+    confluence get NaN and drop out of the cross-section.
+
+    This is the most faithful to the economic story and the most fragile:
+    it thins the cross-section, and a thin cross-section has a much wider
+    null, which is exactly how a high-variance config wins a sweep by luck.
+    --audit reports how many coins it actually scores."""
+    def f(t):
+        s = SFN.iloc[t - k:t].sum(min_count=1)
+        fu = FUND.iloc[t - k:t].sum(min_count=1)
+        score = Z(s) - Z(fu)
+        return score.where(np.sign(s) != np.sign(fu))
+    return f
 
 
 def sig_disagree(SFN, PFN, k):
@@ -226,13 +329,25 @@ def audit() -> int:
             "   (or set HYRO_SPOT_DATA_DIR)")
         return 2
 
-    idx, PX, R, VOL, DN, SVOL, SDN, PFN, SFN, covered = build()
+    (idx, PX, R, VOL, DN, SVOL, SDN, PFN, SFN, covered,
+     FUND, fcov) = build()
     missing = [c for c in R.columns if c not in covered]
 
     log(f"  spot dir   : {SPOT}")
     log(f"  perp panel : {len(R.columns)} coins, {len(idx)} days "
         f"({idx[0].date()} -> {idx[-1].date()})")
     log(f"  spot cover : {len(covered)}/{len(R.columns)} coins")
+    if FUND_DIR is None:
+        log(f"  funding    : NOT FOUND -- confluence variants will be SKIPPED")
+        log(f"               paths tried: {', '.join(_FUND_TRIED)}")
+        log(f"               fix: python3 -u fetch_funding.py --run")
+        worst = max(worst, 1)
+    else:
+        log(f"  funding    : {len(fcov)}/{len(R.columns)} coins from {FUND_DIR}")
+        if not fcov:
+            log(f"               no usable funding series -- confluence "
+                f"variants SKIPPED")
+            worst = max(worst, 1)
     if missing:
         log(f"  no spot    : {', '.join(missing)}")
         if len(covered) < 2 * 5 + 2:
@@ -290,18 +405,22 @@ def audit() -> int:
     #         whose last row is poisoned and confirm the score does not move.
     log("")
     t = len(idx) - 1
-    builders = {
-        "div":       lambda S, P: sig_div(S, P, 3),
-        "spot_only": lambda S, P: sig_spot_only(S, 3),
-        "perp_only": lambda S, P: sig_perp_only(P, 3),
-        "disagree":  lambda S, P: sig_disagree(S, P, 3),
-    }
-    for name, mk in builders.items():
-        clean = mk(SFN, PFN)(t)
-        Sp, Pp = SFN.copy(), PFN.copy()
+    builders = dict(_grid(have_funding=bool(fcov)))
+    # one representative per family is enough; the lookback does not change
+    # which bars a slice touches
+    fam, seen = {}, set()
+    for nm, (b, _n, _h) in builders.items():
+        key = nm.split(" k=")[0]
+        if key not in seen:
+            seen.add(key)
+            fam[key] = b
+    for name, mk in fam.items():
+        clean = mk(SFN, PFN, FUND)(t)
+        Sp, Pp, Fp = SFN.copy(), PFN.copy(), FUND.copy()
         Sp.iloc[t] = 0.99          # poison bar t only
         Pp.iloc[t] = -0.99
-        dirty = mk(Sp, Pp)(t)
+        Fp.iloc[t] = 0.99
+        dirty = mk(Sp, Pp, Fp)(t)
         a = clean.reindex(sorted(clean.index)).astype(float)
         b = dirty.reindex(sorted(dirty.index)).astype(float)
         same = np.allclose(a.fillna(-999), b.fillna(-999), atol=1e-12)
@@ -309,10 +428,10 @@ def audit() -> int:
         if not same:
             worst = 2
 
-    # ---- 4. the signal must actually fire
+    # ---- 4. the signal must actually fire, on enough coins
     log("")
-    for name, mk in builders.items():
-        n_valid = [int(mk(SFN, PFN)(tt).notna().sum())
+    for name, mk in fam.items():
+        n_valid = [int(mk(SFN, PFN, FUND)(tt).notna().sum())
                    for tt in range(60, len(idx), 50)]
         log(f"  {name:<10} median coins scored per rebalance: "
             f"{int(np.median(n_valid))}")
@@ -348,7 +467,7 @@ def _roll(M: pd.DataFrame, off: int) -> pd.DataFrame:
                         index=M.index, columns=M.columns)
 
 
-def null_dist(R, builder, SFN, PFN, n, hold, seeds=60, seed0=0):
+def null_dist(R, builder, SFN, PFN, FUND, n, hold, seeds=60, seed0=0):
     """Circular-time-shift null for ONE config.
 
     `builder(S, P)` must return a signal function, so the same construction
@@ -365,26 +484,45 @@ def null_dist(R, builder, SFN, PFN, n, hold, seeds=60, seed0=0):
     out = []
     for _ in range(seeds):
         off = int(rng.integers(lo, T - lo))
-        s = xs(R, builder(_roll(SFN, off), _roll(PFN, off)), n=n, hold=hold)
+        s = xs(R, builder(_roll(SFN, off), _roll(PFN, off),
+                          _roll(FUND, off)), n=n, hold=hold)
         out.append(stats(s)[0])
     return np.array(out)
 
 
 # config name -> (builder, n_per_side, hold). One table, so the sweep, the
 # null and the verdict can never be computing different things.
-def _grid():
+def _grid(have_funding: bool = False):
+    """Every builder takes (SFN, PFN, FUND) whether it uses all three or not,
+    so null_dist can roll all three panels through one call signature. If
+    funding is rolled while the rest is not, the funding leg stays aligned
+    with forward returns and the null is silently too easy."""
     g = {}
     for k in (1, 2, 3, 5, 7):
         for hold in (5, 7, 10):
             g[f"div k={k} h={hold}"] = (
-                (lambda kk: (lambda S, P: sig_div(S, P, kk)))(k), 5, hold)
+                (lambda kk: (lambda S, P, F: sig_div(S, P, kk)))(k), 5, hold)
     for k in (3, 5):
         g[f"spot_only k={k}"] = (
-            (lambda kk: (lambda S, P: sig_spot_only(S, kk)))(k), 5, 7)
+            (lambda kk: (lambda S, P, F: sig_spot_only(S, kk)))(k), 5, 7)
         g[f"perp_only k={k}"] = (
-            (lambda kk: (lambda S, P: sig_perp_only(P, kk)))(k), 5, 7)
+            (lambda kk: (lambda S, P, F: sig_perp_only(P, kk)))(k), 5, 7)
         g[f"disagree k={k}"] = (
-            (lambda kk: (lambda S, P: sig_disagree(S, P, kk)))(k), 5, 7)
+            (lambda kk: (lambda S, P, F: sig_disagree(S, P, kk)))(k), 5, 7)
+
+    # The pre-registered confluence grid: 3 variants x 2 lookbacks = 6.
+    # Skipped entirely when there is no funding data, so a missing input
+    # narrows the test rather than silently changing it.
+    if have_funding:
+        for k in (3, 5):
+            g[f"sfund_add k={k}"] = (
+                (lambda kk: (lambda S, P, F: sig_sfund_add(S, F, kk)))(k), 5, 7)
+            g[f"sfund_div k={k}"] = (
+                (lambda kk: (lambda S, P, F: sig_sfund_div(S, P, F, kk)))(k),
+                5, 7)
+            g[f"sfund_mask k={k}"] = (
+                (lambda kk: (lambda S, P, F: sig_sfund_mask(S, F, kk)))(k),
+                5, 7)
     return g
 
 
@@ -394,9 +532,11 @@ def sweep(n_null=200, panels=None, quiet=False) -> int:
         if rc == 2:
             return 2
         panels = build()
-    idx, PX, R, VOL, DN, SVOL, SDN, PFN, SFN, covered = panels
+    (idx, PX, R, VOL, DN, SVOL, SDN, PFN, SFN, covered,
+     FUND, fcov) = panels
 
-    grid = _grid()
+    have_f = bool(fcov)
+    grid = _grid(have_funding=have_f)
     if not quiet:
         log("\n" + "=" * 78)
         log("  SWEEP")
@@ -409,7 +549,7 @@ def sweep(n_null=200, panels=None, quiet=False) -> int:
     rest = [k for k in grid if not k.startswith("div")]
     for name in order:
         b, n, hold = grid[name]
-        series[name] = xs(R, b(SFN, PFN), n=n, hold=hold)
+        series[name] = xs(R, b(SFN, PFN, FUND), n=n, hold=hold)
         results[name] = row(name, series[name]) if not quiet \
             else stats(series[name])[0]
 
@@ -419,7 +559,7 @@ def sweep(n_null=200, panels=None, quiet=False) -> int:
         log("  is no divergence edge, only a cleaner tape or old `delta`.")
     for name in rest:
         b, n, hold = grid[name]
-        series[name] = xs(R, b(SFN, PFN), n=n, hold=hold)
+        series[name] = xs(R, b(SFN, PFN, FUND), n=n, hold=hold)
         results[name] = row(name, series[name]) if not quiet \
             else stats(series[name])[0]
 
@@ -433,7 +573,7 @@ def sweep(n_null=200, panels=None, quiet=False) -> int:
         log(f"  NULL for the winning config ({best}), {n_null} circular")
         log(f"  time shifts. Turnover and fee drag preserved; only the")
         log(f"  alignment with forward returns is destroyed.")
-    null = null_dist(R, b, SFN, PFN, n, hold, seeds=n_null)
+    null = null_dist(R, b, SFN, PFN, FUND, n, hold, seeds=n_null)
 
     n_cfg = len(results)
 
@@ -547,7 +687,13 @@ def _synth(days, seed, edge=0.0):
     PFN = pd.DataFrame(pf, index=idx, columns=coins)
     SFN = pd.DataFrame(sf, index=idx, columns=coins)
     VOL = pd.DataFrame(1.0, index=idx, columns=coins)
-    return (idx, PX, R, VOL, PFN * VOL, VOL, SFN * VOL, PFN, SFN, coins)
+    # synthetic funding: pure noise even in the edge=1 case, so the
+    # confluence variants are exercised for CRASHES and LOOKAHEAD without
+    # being handed an edge they did not earn
+    FUND = pd.DataFrame(persist(rng.normal(0, 3e-4, (days, C))),
+                        index=idx, columns=coins)
+    return (idx, PX, R, VOL, PFN * VOL, VOL, SFN * VOL, PFN, SFN, coins,
+            FUND, coins)
 
 
 def _verdict(best, bsh, p_adj, series):
@@ -612,7 +758,8 @@ def selftest(days=700, n_null=200, seeds=(12345, 777, 20260101)) -> int:
 # correlation against the live book
 # --------------------------------------------------------------------------
 def corr(k=3, hold=7) -> int:
-    idx, PX, R, VOL, DN, SVOL, SDN, PFN, SFN, covered = build()
+    (idx, PX, R, VOL, DN, SVOL, SDN, PFN, SFN, covered,
+     FUND, fcov) = build()
     spot = xs(R, sig_div(SFN, PFN, k), n=5, hold=hold)
 
     log(f"  building the live sleeves from book.py for comparison...")

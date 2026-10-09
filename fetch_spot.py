@@ -68,6 +68,7 @@ USAGE
     python3 -u fetch_spot.py --run --limit 3      # fetch 3 coins, verify, then
     python3 -u fetch_spot.py --run                # the rest
     python3 -u fetch_spot.py --verify             # audit files already written
+    python3 -u fetch_spot.py --topup              # append recent bars (live)
 
 Resumable: a coin already present in ~/spot_data is skipped. Delete its file
 to refetch.
@@ -384,9 +385,116 @@ def verify() -> int:
 # --------------------------------------------------------------------------
 # main
 # --------------------------------------------------------------------------
+HEADER = ["open_time", "open", "high", "low", "close",
+          "volume", "taker_buy", "delta"]
+
+
+def topup() -> int:
+    """Append recent bars to every existing spot file. THIS IS THE LIVE PATH:
+    the same fetch() and the same delta arithmetic as the history, just a
+    short window -- so the live signal and the backtest read one code path,
+    the parity-by-construction rule that sr/srflip already follow.
+
+    Reads and VALIDATES the existing header before appending. That check is
+    not paranoia: topup.py once appended 2 columns to a 3-column open-interest
+    file and shifted every appended row, corrupting the whole OI panel, and
+    check_oi.py shipped with the same bug class it was written to catch.
+    """
+    if not os.path.isdir(OUT):
+        log(f"  nothing to top up -- {OUT} does not exist")
+        return 2
+    files = sorted(glob.glob(f"{OUT}/*_spot_1h.csv"))
+    if not files:
+        log(f"  nothing to top up in {OUT}")
+        return 2
+
+    log(f"  topping up {len(files)} spot files in {OUT}")
+    now = int(time.time() * 1000)
+    ok = fresh = failed = 0
+
+    for path in files:
+        coin = os.path.basename(path).replace("_spot_1h.csv", "")
+        try:
+            with open(path) as f:
+                rdr = csv.reader(f)
+                head = next(rdr, None)
+                last_ts, nrows = None, 0
+                for rowv in rdr:
+                    if rowv:
+                        last_ts = rowv[0]
+                        nrows += 1
+        except Exception as e:
+            log(f"  {coin:<10} FAIL unreadable: {e}")
+            failed += 1
+            continue
+
+        if head != HEADER:
+            log(f"  {coin:<10} FAIL header mismatch -- refusing to append")
+            log(f"             found    {head}")
+            log(f"             expected {HEADER}")
+            failed += 1
+            continue
+        if last_ts is None:
+            log(f"  {coin:<10} FAIL no data rows")
+            failed += 1
+            continue
+        try:
+            last = int(last_ts)
+        except ValueError:
+            log(f"  {coin:<10} FAIL last timestamp not an int: {last_ts!r}")
+            failed += 1
+            continue
+
+        age_h = (now - last) / 3_600_000
+        if age_h < 2:
+            fresh += 1
+            continue
+
+        rows = fetch(coin, last + 1, now)
+        if rows is None:
+            log("  ABORTING -- Binance is blocking this host")
+            return 2
+        new = [ts for ts in sorted(rows) if ts > last]
+        if not new:
+            # A stale file that returns nothing is NOT "fresh" -- that is a
+            # failed fetch wearing a success message, and a silent one would
+            # mean spot data stops updating while the report says it is fine.
+            # Allow a small grace window for the current, still-forming bar.
+            if age_h > 4:
+                log(f"  {coin:<10} FAIL {age_h:.0f}h stale but the API "
+                    f"returned no new bars (fetch failed, or symbol delisted)")
+                failed += 1
+            else:
+                fresh += 1
+            continue
+
+        bad = 0
+        with open(path, "a", newline="") as f:
+            w = csv.writer(f)
+            for ts in new:
+                k = rows[ts]
+                try:
+                    vol = float(k[5]); tb = float(k[9])
+                except (ValueError, IndexError, TypeError):
+                    continue
+                if tb > vol:
+                    bad += 1
+                # column order taken from HEADER, which was just validated
+                w.writerow([ts, k[1], k[2], k[3], k[4],
+                            f"{vol:.8f}", f"{tb:.8f}", f"{2*tb - vol:.8f}"])
+        ok += 1
+        flag = f"  ** {bad} taker>volume **" if bad else ""
+        log(f"  {coin:<10} +{len(new):,} bars (was {age_h:.0f}h stale){flag}")
+
+    log(f"\n  topped up {ok}, already fresh {fresh}, failed {failed}")
+    return 2 if failed else 0
+
+
 def main() -> int:
     if "--verify" in sys.argv:
         return verify()
+    if "--topup" in sys.argv:
+        return topup()
 
     want = coins()
     have = set()
@@ -420,6 +528,7 @@ def main() -> int:
     if "--run" not in sys.argv:
         log("\n  run with --run   (--limit N to test a few first)")
         log("  then             --verify")
+        log("  each cycle       --topup   (appends recent bars; the live path)")
         return 0
 
     if "--limit" in sys.argv:
