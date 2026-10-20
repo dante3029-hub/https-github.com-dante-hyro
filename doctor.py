@@ -254,7 +254,40 @@ def check_exchange():
         missing = " and ".join(
             n for n, v in (("BYBIT_API_KEY", key),
                            ("BYBIT_API_SECRET", sec)) if not v)
-        say(CRITICAL, "exchange", f"{missing} missing from the environment",
+        # CRITICAL distinction, and getting it wrong cost a wrong diagnosis:
+        # doctor reports THIS SHELL's environment, but run_cycle.sh sources
+        # .env before each cycle. Credentials absent here does NOT mean the
+        # bot lacks them -- it usually means doctor was run interactively
+        # without sourcing .env. Check for the file before accusing the bot
+        # of being unable to trade.
+        envf = None
+        for cand in (os.path.join(os.environ.get("HYRO_WORKSPACE", ""), ".env"),
+                     ".env",
+                     os.path.expanduser("~/bot_hyrotrader_v1/.env")):
+            if cand and os.path.exists(cand):
+                envf = cand
+                break
+        if envf:
+            has = False
+            try:
+                with open(envf) as f:
+                    has = any(ln.strip().startswith("BYBIT_API_KEY=")
+                              and len(ln.split("=", 1)[1].strip()) > 0
+                              for ln in f)
+            except Exception:
+                pass
+            if has:
+                say(WARN, "exchange",
+                    f"{missing} not in THIS SHELL, but {envf} defines it",
+                    "the cron sources .env per cycle, so the BOT likely has "
+                    "credentials. To check properly: "
+                    "set -a; . .env; set +a; python3 doctor.py")
+                return
+            say(CRITICAL, "exchange",
+                f"{missing} absent from the environment AND from {envf}",
+                "THE BOT CANNOT PLACE ORDERS.")
+            return
+        say(CRITICAL, "exchange", f"{missing} missing, and no .env found",
             "THE BOT CANNOT PLACE ORDERS. It will compute targets and "
             "silently do nothing.")
         return
