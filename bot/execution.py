@@ -375,9 +375,27 @@ def sync_protective_stops(client, stops_by_symbol: dict, dry_run: bool,
             logger.info(f"[DRY RUN] would sync trailing SL {symbol} @ {sl:.8f}")
             continue
         try:
-            ok = client.modify_sl(symbol, sl)
-            (out["stops_synced"] if ok else out["stops_failed"]).append(
-                {"symbol": symbol, "sl": round(sl, 8), "SENT": bool(ok)})
+            # Prefer the detailed variant so a rejection reports retCode and
+            # retMsg. The inherited modify_sl() returns a bare bool, which
+            # produced 13 alerts saying only "SENT: False" with no way to
+            # tell a stale stop from a missing position from a bad price.
+            fn = getattr(client, "modify_sl_detailed", None)
+            if fn is not None:
+                r = fn(symbol, sl)
+                ok = bool(r.get("ok"))
+                rec = {"symbol": symbol, "sl": round(sl, 8), "SENT": ok}
+                if not ok:
+                    rec["retCode"] = r.get("retCode")
+                    rec["retMsg"] = r.get("retMsg")
+                    logger.error(f"trailing SL sync FAILED {symbol} @ {sl}: "
+                                 f"retCode={r.get('retCode')} "
+                                 f"retMsg={r.get('retMsg')!r}")
+                (out["stops_synced"] if ok else out["stops_failed"]).append(rec)
+            else:
+                ok = client.modify_sl(symbol, sl)
+                (out["stops_synced"] if ok else out["stops_failed"]).append(
+                    {"symbol": symbol, "sl": round(sl, 8), "SENT": bool(ok),
+                     "retMsg": "client lacks modify_sl_detailed -- no detail"})
         except Exception as e:                                  # noqa: BLE001
             out["stops_failed"].append({"symbol": symbol, "sl": round(sl, 8),
                                         "error": f"{type(e).__name__}: {e}"})

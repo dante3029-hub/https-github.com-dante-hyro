@@ -169,6 +169,34 @@ class HardenedBybitClient(BybitClient):
         takeProfit field. Omitting stopLoss leaves the existing SL untouched
         (Bybit v5 trading-stop semantics), so this cannot clobber the stop.
         """
+    def modify_sl_detailed(self, symbol: str, sl_price: float) -> dict:
+        """modify_sl(), but returns WHY it failed.
+
+        The inherited modify_sl() returns a bare bool. When Bybit rejects an
+        amend the retCode and retMsg are discarded, so the Discord alert said
+        only "SENT: False" for 13 positions and gave no way to tell a stale
+        stop from a missing position from a bad price. Blind failure on a
+        protective stop is the worst place in the system to have no detail.
+
+        Returns {"ok": bool, "retCode": int|None, "retMsg": str}.
+        """
+        try:
+            sl_str = self.quantize_price(symbol, sl_price)
+            resp = self._post("/v5/position/trading-stop", {
+                "category": "linear", "symbol": symbol,
+                "stopLoss": sl_str, "slTriggerBy": "LastPrice",
+            })
+        except Exception as e:                                  # noqa: BLE001
+            return {"ok": False, "retCode": None,
+                    "retMsg": f"{type(e).__name__}: {e}"}
+        rc = resp.get("retCode")
+        # 34040 / "not modified" means the level is already what we want --
+        # that is success, not failure. Treating it as failure would alert
+        # every cycle on a stop that is correctly in place.
+        ok = rc == 0 or rc == 34040
+        return {"ok": ok, "retCode": rc,
+                "retMsg": resp.get("retMsg", "") or ""}
+
         tp_str = self.quantize_price(symbol, tp_price)
         resp = self._post("/v5/position/trading-stop", {
             "category": "linear", "symbol": symbol,
