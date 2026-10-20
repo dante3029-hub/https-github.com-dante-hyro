@@ -171,7 +171,14 @@ def check_sleeves(taker_dir, quick=False, only=None):
 # ── 3. tracker state ─────────────────────────────────────────────────────
 def check_state(state_path):
     if not state_path or not os.path.exists(state_path):
-        say(WARN, "state", "no state file yet", state_path or "(unset)")
+        # Legitimate on a genuine first run. NOT legitimate if the bot has
+        # supposedly been live -- state is written after a cycle executes,
+        # so its absence means NO CYCLE HAS EVER COMPLETED. Say that out
+        # loud rather than printing a bare "no state file yet", which read
+        # as routine for 20 days while nothing traded.
+        say(WARN, "state", "no state file yet -- NO CYCLE HAS EVER COMPLETED",
+            f"{state_path or '(unset)'} | fine on first run; if the bot has "
+            f"been live, this IS the bug")
         return
     try:
         with open(state_path) as f:
@@ -236,9 +243,26 @@ def check_config():
 # ── 5. exchange ──────────────────────────────────────────────────────────
 def check_exchange():
     key = os.environ.get("BYBIT_API_KEY")
-    if not key:
-        say(WARN, "exchange", "no BYBIT_API_KEY in the environment",
-            "skipping connectivity check")
+    sec = os.environ.get("BYBIT_API_SECRET")
+    # 2026-10-20: this was WARN, which printed "safe, but read them" and
+    # exited 1. A bot that cannot authenticate is not "safe" -- it is inert.
+    # It computed target weights every cycle for 20 DAYS, placed nothing,
+    # and the account sat flat while we debated whether the edge was real.
+    # A missing credential is the difference between trading and not
+    # trading, so it is CRITICAL and exits 2.
+    if not key or not sec:
+        missing = " and ".join(
+            n for n, v in (("BYBIT_API_KEY", key),
+                           ("BYBIT_API_SECRET", sec)) if not v)
+        say(CRITICAL, "exchange", f"{missing} missing from the environment",
+            "THE BOT CANNOT PLACE ORDERS. It will compute targets and "
+            "silently do nothing.")
+        return
+    if key == sec:
+        # seen before: the secret was pasted into both fields, producing a
+        # 401 with an empty body that surfaced as a JSON parse error
+        say(CRITICAL, "exchange", "BYBIT_API_KEY equals BYBIT_API_SECRET",
+            "one value was pasted into both fields -- auth will 401")
         return
     try:
         import urllib.request
