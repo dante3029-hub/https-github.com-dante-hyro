@@ -74,6 +74,44 @@ SLEEVE_VOL_DAILY = {
     'srflip':  0.010289,
 }
 
+# ---------------------------------------------------------------------------
+# CONVICTION -- how much we BELIEVE each sleeve, independent of its vol.
+# ---------------------------------------------------------------------------
+# Equal-risk sizing answers "how big must this sleeve be to carry 1/9 of the
+# risk". It silently assumes all nine DESERVE 1/9. The audit says they do not.
+#
+# Applied as a straight multiplier AFTER the equal-risk calculation, so the
+# risk maths stays correct and this records belief separately and visibly.
+# 1.0 = full equal-risk share. Set from measured evidence only, with the
+# evidence written next to it.
+#
+# tilt_audit.py, exact live constructions, parity-verified against
+# book.build() to 1e-12:
+#
+#   skew    85% of its Sharpe is reproduced by holding its AVERAGE weight
+#           vector and never retrading. 0.85 -> 0.31 without ZEC. It also
+#           rebalances every 45 days, so it is a near-permanent position,
+#           and at equal-risk it was taking $68,182 of a $170,682 book --
+#           40% of gross to the sleeve with the weakest evidence of being
+#           a signal at all.
+#   delta   79% static, 1.00 -> 0.33 without ZEC. Reduced, not zeroed: it
+#           is still the construction the whole book was built around and
+#           the remaining six sleeves are unaudited, so a staged cut beats
+#           a guess.
+#   relvol  0% static -- genuinely timing. Full conviction.
+#
+# The other six are UNAUDITED and stay at 1.0 by default. That is not a
+# statement that they are fine; it is a statement that we have not looked.
+# Lower them when tilt_audit covers them, not before.
+#
+# To revert: set a value back to 1.0. Takes effect on the next cycle.
+SLEEVE_CONVICTION = {
+    'skew':   0.40,
+    'delta':  0.60,
+    'relvol': 1.00,
+}
+DEFAULT_CONVICTION = 1.0
+
 MIN_OBS_FOR_LIVE = 60      # days of live history before trusting it over the prior
 
 MIN_OBS = 20            # below this, a vol estimate is noise
@@ -170,7 +208,19 @@ def compute_multipliers_equal_risk(
             k_scale = target_daily_vol / blend_vol
             out = {k: v * k_scale for k, v in out.items()}
 
-    return {k: v * account_multiplier for k, v in out.items()}
+    # Conviction LAST, after the dollar-vol scaling, so a down-weighted
+    # sleeve genuinely shrinks instead of being scaled back up to hit the
+    # blend target. Logged per sleeve: a sleeve quietly shrinking is the
+    # failure mode this project keeps hitting.
+    final = {}
+    for k, v in out.items():
+        conv = SLEEVE_CONVICTION.get(k, DEFAULT_CONVICTION)
+        if conv != 1.0:
+            logger.warning("sleeve %s conviction %.2f -- multiplier %.3f -> "
+                           "%.3f (see SLEEVE_CONVICTION for the evidence)",
+                           k, conv, v, v * conv)
+        final[k] = v * conv * account_multiplier
+    return final
 
 
 def compute_sleeve_multipliers(sleeve_return_history: Dict[str, np.ndarray],
