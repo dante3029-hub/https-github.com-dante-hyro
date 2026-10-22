@@ -106,9 +106,25 @@ SLEEVE_VOL_DAILY = {
 #
 # To revert: set a value back to 1.0. Takes effect on the next cycle.
 SLEEVE_CONVICTION = {
-    'skew':   0.40,
-    'delta':  0.60,
-    'relvol': 1.00,
+    # --- measured SIGNALS: full weight -------------------------------------
+    'relvol': 1.00,   # 1.09 Sharpe, 0% static. 1.09 -> 0.72 without ZEC.
+    'oirank': 1.00,   # 0.90 Sharpe, 0% static, bar-t blindness PROVEN.
+    # --- measured TILTS: cut hard ------------------------------------------
+    # Not zeroed. A static tilt is a coin-selection bet that did pay over one
+    # 3.7-year sample and may keep paying; it is simply not the timing signal
+    # it was risk-budgeted as. Sized as what it is -- a small bet, not a core
+    # sleeve. Zeroing would also discard the only out-of-sample read we will
+    # ever get on whether these characteristics persist.
+    'delta':  0.25,   # 1.01 Sharpe but 83% STATIC -> timing part ~0.17.
+                      # 1.01 -> 0.33 without ZEC.
+    'skew':   0.15,   # 0.82 Sharpe but 90% STATIC -> timing part ~0.08.
+                      # 0.82 -> 0.29 without ZEC. Was 40% of gross.
+    # --- UNAUDITED: left at 1.0, which is not a pass -------------------------
+    # fvg, pattern, sr, srflip, cascade. These are EVENT sleeves and the
+    # static-tilt test does not apply to them -- "the average weight vector"
+    # is meaningless for a book holding three names on its own schedule. They
+    # need a random-timing control (same coins, same trade count, same hold,
+    # random entries) before any of these numbers mean anything.
 }
 DEFAULT_CONVICTION = 1.0
 
