@@ -168,7 +168,12 @@ def audit_one(name, R, VOL, DN, sig, n, hold, loo=False):
     worst = None
     if loo:
         rows = []
-        for c in list(R.columns):
+        cols = list(R.columns)
+        log(f"    leave-one-out: {len(cols)} backtests, "
+            f"~{len(cols)*2}s on a 1-vCPU box...")
+        for ci, c in enumerate(cols, 1):
+            if ci % 5 == 0:
+                log(f"      {ci}/{len(cols)} coins done")
             keep = [x for x in R.columns if x != c]
             s2 = live_sleeves(R[keep], VOL[keep], DN[keep]).get(name)
             if s2 is None:
@@ -187,6 +192,7 @@ def audit_one(name, R, VOL, DN, sig, n, hold, loo=False):
 
 def main() -> int:
     loo = "--loo" in sys.argv
+    log("  loading the panel (24 coins x ~31k hourly bars)...")
     idx, PX, R, VOL, DN = book.panel()
     log(f"  {len(R.columns)} coins, {len(idx)} days "
         f"({idx[0].date()} -> {idx[-1].date()})\n")
