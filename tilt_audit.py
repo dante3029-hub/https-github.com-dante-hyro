@@ -54,6 +54,7 @@ USAGE
 """
 from __future__ import annotations
 
+import os
 import sys
 
 import numpy as np
@@ -166,7 +167,7 @@ def audit_one(name, R, VOL, DN, sig, n, hold, loo=False):
         f"(equal-dollar {sh:.2f}, {rw_sh-sh:+.2f})")
 
     worst = None
-    if loo:
+    if loo and VOL is not None and DN is not None:
         rows = []
         cols = list(R.columns)
         log(f"    leave-one-out: {len(cols)} backtests, "
@@ -194,6 +195,7 @@ def main() -> int:
     loo = "--loo" in sys.argv
     log("  loading the panel (24 coins x ~31k hourly bars)...")
     idx, PX, R, VOL, DN = book.panel()
+    globals()["_IDX"] = idx
     log(f"  {len(R.columns)} coins, {len(idx)} days "
         f"({idx[0].date()} -> {idx[-1].date()})\n")
 
@@ -211,6 +213,10 @@ def main() -> int:
         r = audit_one(name, R, VOL, DN, sig, n, hold, loo=loo)
         if r:
             out.append(r)
+
+    r = audit_oirank(R, idx, loo=loo)
+    if r:
+        out.append(r)
 
     log("")
     log("  " + "=" * 66)
@@ -261,6 +267,109 @@ def main() -> int:
     log("  high static share is therefore conservative; a low one is not")
     log("  proof that the sleeve is genuinely timing.")
     return 0
+
+
+
+# ---------------------------------------------------------------------------
+# OIRANK -- the biggest risk share in the book, and unaudited until now
+# ---------------------------------------------------------------------------
+# After conviction cut skew and delta, oirank carries 27.8% of book risk --
+# the largest single share. It earns that because its vol prior is the lowest
+# in the book (0.004495), so equal-risk hands it a 2.29x multiplier. Low
+# measured vol buying a large notional is the SAME mechanism that put skew at
+# 40% of gross, so this needs the same test the others got.
+#
+# TIMING, and getting it wrong here has a precedent. sleeve_oirank's docstring
+# is explicit: "the score at bar t uses only OI up to and including t, and the
+# caller applies the weights from bar t onward" -- so the return it earns is
+# t -> t+1. book.xs uses the opposite convention: sig(t) earns R[t], the
+# t-1 -> t return. Wiring oi_scores(OI, t) straight into book.xs would
+# therefore apply weights to the bar they were computed on. That exact bug
+# reported +4.09 for this sleeve during development against a real 1.34.
+#
+# So the adapter is oi_scores(OI, t-1), and audit_oirank() PROVES it by
+# poisoning bar t and requiring the score not to move.
+
+def load_oi_daily(coins, idx):
+    """Daily OI matrix aligned to the price index. Returns None if the data
+    is not present -- a missing input must skip the audit loudly, never
+    silently produce a number from nothing."""
+    import glob
+    cands = []
+    for base in (os.environ.get("HYRO_OI_DATA_DIR"), "oi_data",
+                 os.path.expanduser("~/oi_data"), "clean_panel/oi",
+                 os.path.expanduser("~/bot_hyrotrader_v1/clean_panel/oi"),
+                 "run/oi_raw"):
+        if base and os.path.isdir(base):
+            cands.append(base)
+    if not cands:
+        return None, "no OI directory found"
+    base = cands[0]
+    cols, got = {}, 0
+    for c in coins:
+        p = None
+        for pat in (f"{base}/{c}_oi_1h.csv", f"{base}/{c}_oi.csv"):
+            if os.path.exists(pat):
+                p = pat
+                break
+        if p is None:
+            cols[c] = pd.Series(np.nan, index=idx)
+            continue
+        try:
+            df = pd.read_csv(p)
+        except Exception:
+            cols[c] = pd.Series(np.nan, index=idx)
+            continue
+        tcol = next((x for x in ("timestamp", "open_time", "ts")
+                     if x in df.columns), None)
+        vcol = next((x for x in ("open_interest", "sum_oi", "oi", "value")
+                     if x in df.columns), None)
+        if tcol is None or vcol is None:
+            cols[c] = pd.Series(np.nan, index=idx)
+            continue
+        df["t"] = pd.to_datetime(pd.to_numeric(df[tcol], errors="coerce"),
+                                 unit="ms", errors="coerce")
+        s = (df.dropna(subset=["t"]).set_index("t")[vcol]
+             .apply(pd.to_numeric, errors="coerce")
+             .resample("1D").last().reindex(idx).ffill(limit=3))
+        cols[c] = s
+        got += 1
+    if got < 12:
+        return None, f"only {got} coins have OI data (need 12+)"
+    return pd.DataFrame(cols, columns=list(coins)), f"{got}/{len(coins)} coins"
+
+
+def audit_oirank(R, idx, loo=False):
+    try:
+        from signal_engine.sleeve_oirank import oi_scores, N_PER_SIDE
+    except Exception as e:
+        log(f"  oirank: cannot import sleeve_oirank ({e}) -- SKIPPED")
+        return None
+    OIdf, note = load_oi_daily(list(R.columns), idx)
+    if OIdf is None:
+        log(f"  oirank: {note} -- SKIPPED (not 'passed')")
+        return None
+    log(f"  oirank: OI loaded, {note}")
+    OI = OIdf.values
+
+    # t-1, because book.xs earns R[t] from sig(t). See the note above.
+    def sig(t):
+        return pd.Series(oi_scores(OI, t - 1), index=R.columns)
+
+    # PROVE it is blind to bar t before reporting any Sharpe
+    t = len(idx) - 1
+    clean = sig(t)
+    OI2 = OI.copy()
+    OI2[t, :] = OI2[t, :] * 7.3 + 1e6          # poison bar t only
+    dirty = pd.Series(oi_scores(OI2, t - 1), index=R.columns)
+    same = np.allclose(clean.fillna(-999).values,
+                       dirty.fillna(-999).values, atol=1e-12)
+    log(f"  oirank: blind to bar t: {'OK' if same else 'FAIL LOOKAHEAD'}")
+    if not same:
+        log("  REFUSING to report a Sharpe for a signal that reads its own bar")
+        return None
+
+    return audit_one("oirank", R, None, None, sig, N_PER_SIDE, 3, loo=False)
 
 
 if __name__ == "__main__":
