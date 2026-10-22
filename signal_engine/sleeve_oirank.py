@@ -57,7 +57,27 @@ from .rank_weights import rank_to_weights
 
 LOOKBACKS = (3, 5, 7, 10, 14)
 N_PER_SIDE = 5
-CADENCE_HOURS = 3 * 24           # 3-day hold
+# 2026-10-22: 3 -> 5 days. hold_sweep.py on 1,357 days of the live panel.
+#
+#   hold   net Sharpe   fees/yr   GROSS signal (net + fee drag)
+#     3d      0.90       15.5%        2.71   <- was live
+#     5d      1.06        9.3%        2.14
+#     7d      0.83        6.6%        1.60
+#    10d      0.56        4.7%        1.10
+#    14d      0.35        3.3%        0.74
+#
+# The GROSS signal decays monotonically, which is what a real signal with a
+# short half-life looks like -- not a fitted parameter. Fees fall as 1/hold.
+# 5 days is where the two curves cross, and the shape check reports a
+# PLATEAU (+17%, +0.16 over its neighbours), not the spike that got the
+# 7-day LOOKBACK blended away in this same file.
+#
+# HONEST CAVEAT: the standard error on a Sharpe over 3.7 years is ~0.64, so
+# 0.90 -> 1.06 is INSIDE the noise taken on its own. What justifies the
+# change is not the peak, it is that the fee saving is CERTAIN (15.5% ->
+# 9.3% of notional per year) while the Sharpe difference is estimated. We
+# are buying a known cost reduction, not chasing a measured gain.
+CADENCE_HOURS = 5 * 24           # 5-day hold
 
 
 def _pct_change_at(OI: np.ndarray, t: int, k: int) -> np.ndarray:
