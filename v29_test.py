@@ -398,6 +398,20 @@ def main() -> int:
             log(f"    -> most lineups make money. The result does NOT depend")
             log(f"       on picking the right coins.")
 
+    # The null is O(sims x coins x trades x hold). At 63 coins and 300 draws
+    # that is ~19,000 full backtests in pure Python and it does not finish.
+    # It is also not the question --all-coins is asking, so it is skipped
+    # there by default rather than left to hang.
+    if "--no-null" in sys.argv or ("--all-coins" in sys.argv
+                                   and "--null" not in sys.argv):
+        log("")
+        log("  RANDOM-TIMING CONTROL: skipped.")
+        log("  It is O(sims x coins x trades) and does not finish at 63 coins.")
+        log("  The lineup test above is what --all-coins is for. To run the")
+        log("  null, use the 9-coin default (no --all-coins), or force it")
+        log("  with --null and a small --sims.")
+        return 0
+
     log("")
     log("  RANDOM-TIMING CONTROL -- same coins, same trade count, same stop,")
     log("  same TP, same trailing exit. Only the entry bar is random.")
@@ -419,8 +433,8 @@ def main() -> int:
         if acc:
             ar = np.array([x[0] for x in acc]); aw = np.array([x[1] for x in acc])
             nulls.append(float(np.sum(ar * aw) / np.sum(aw)))
-        if s == 0:
-            log(f"    (one draw takes a moment; {sims} to go)")
+        if s == 0 or (s + 1) % max(1, sims // 10) == 0:
+            log(f"    {s+1}/{sims} draws")
     nulls = np.array(nulls)
     p_emp = (1.0 + int((nulls >= real).sum())) / (1.0 + len(nulls))
     z = (real - nulls.mean()) / nulls.std() if nulls.std() > 0 else 0.0
