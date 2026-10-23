@@ -72,6 +72,11 @@ EMA_F, EMA_S, ADX_P, ADX_T = 8, 21, 14, 18.0
 CONFIRM, COOLDOWN = 5, 5
 SL_ATR, TP1_ATR, TP1_FRAC = 1.5, 1.5, 0.75
 FEE = 0.00085
+TF = 1          # bar size in hours; --tf N resamples. The fee is the SAME
+                # per round trip whatever the timeframe, so trading tiny
+                # 1h wiggles at a fixed cost is structurally losing. 700
+                # signals per coin over 3.7 years is a trade every 1.9 days
+                # -- trends do not start every two days.
 
 
 def log(m=""):
@@ -79,6 +84,14 @@ def log(m=""):
 
 
 _CACHE = {}
+
+
+def _resample(df, tf):
+    if tf <= 1:
+        return df
+    return df.resample(f"{tf}h").agg(
+        {"open": "first", "high": "max", "low": "min",
+         "close": "last"}).dropna()
 
 
 def _load(path):
@@ -192,6 +205,8 @@ def btc_macd_dir(bars_index):
     df = _load(f)
     if df is None:
         return None
+    if TF > 1:
+        df = _resample(df, TF)
     c = df["close"].values
     def _e(v, p):
         k = 2.0 / (p + 1.0)
@@ -288,6 +303,9 @@ def main() -> int:
     if PERP is None:
         log("  cannot find taker_data; tried: " + ", ".join(_TRIED))
         return 2
+    global TF
+    if "--tf" in sys.argv:
+        TF = int(sys.argv[sys.argv.index("--tf") + 1])
     sims = 300
     if "--sims" in sys.argv:
         sims = int(sys.argv[sys.argv.index("--sims") + 1])
@@ -308,7 +326,8 @@ def main() -> int:
     rows, bh_rows, all_real = [], [], []
     per_coin, frames, btc_cache = {}, {}, {}
     use_btc = "--no-btc-regime" not in sys.argv
-    log(f"  V29: Supertrend + EMA(8/21) + ADX>{ADX_T:.0f}, 1h bars, long AND short")
+    log(f"  V29: Supertrend + EMA(8/21) + ADX>{ADX_T:.0f}, {TF}h bars, "
+        f"long AND short")
     if use_btc:
         if os.path.exists(f"{PERP}/BTC_1h.csv"):
             log("  BTC MACD regime sizing: ON (trades fighting BTC -> 1/4 size)")
@@ -327,7 +346,9 @@ def main() -> int:
             log(f"  {coin:<7} no data -- SKIPPED")
             continue
         df = _load(f)
-        if df is None or len(df) < 2000:
+        if df is not None and TF > 1:
+            df = _resample(df, TF)
+        if df is None or len(df) < (2000 // max(TF, 1)):
             log(f"  {coin:<7} only {len(df)} bars -- SKIPPED")
             continue
         btc = btc_macd_dir(df.index) if use_btc else None
