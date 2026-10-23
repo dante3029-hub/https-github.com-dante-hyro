@@ -175,7 +175,37 @@ def supertrend(h, l, c, period, mult):
     return tr, fu, fl
 
 
-def run_coin(coin, df, entries_override=None):
+def btc_macd_dir(bars_index):
+    """BTC MACD(12,26) zero-line direction, aligned to an index.
+
+    From main.py's BTC-REGIME block: trades whose side FIGHTS the BTC MACD
+    sign are cut to QUARTER size (risk x 0.25), not filtered out. This is a
+    chop defence, and chop is what kills trend-followers -- omitting it
+    measures a weaker V29 than the one that passed two evaluations.
+
+    main.py reads _macd[-2], the last CLOSED bar, so this shifts by one to
+    match: the direction known AT bar i is the MACD of bar i-1.
+    """
+    f = f"{PERP}/BTC_1h.csv"
+    if not os.path.exists(f):
+        return None
+    df = _load(f)
+    if df is None:
+        return None
+    c = df["close"].values
+    def _e(v, p):
+        k = 2.0 / (p + 1.0)
+        out = np.empty(len(v)); e = v[0]
+        for i, x in enumerate(v):
+            e = x * k + e * (1 - k)
+            out[i] = e
+        return out
+    macd = _e(c, 12) - _e(c, 26)
+    s = pd.Series(np.sign(macd), index=df.index).shift(1)   # last CLOSED bar
+    return s.reindex(bars_index, method="ffill")
+
+
+def run_coin(coin, df, entries_override=None, btc=None):
     """Returns list of trade returns. entries_override replaces the signal
     with a given list of entry bars -- the random-timing control uses the
     SAME exit machinery, which is the whole point."""
@@ -244,7 +274,12 @@ def run_coin(coin, df, entries_override=None):
         else:
             realised += (1 - got1 * TP1_FRAC) * (
                 (c[n - 1] / ent - 1) * side)
-        out.append(realised - 2 * FEE)
+        w = 1.0
+        if btc is not None:
+            d = btc.iloc[eb] if eb < len(btc) else np.nan
+            if np.isfinite(d) and d != 0 and int(d) == -side:
+                w = 0.25          # FIGHTS BTC MACD -> quarter size
+        out.append((realised - 2 * FEE, w))
         last_exit = ex
     return out
 
@@ -258,11 +293,21 @@ def main() -> int:
         sims = int(sys.argv[sys.argv.index("--sims") + 1])
 
     rows, bh_rows, all_real = [], [], []
-    per_coin, frames = {}, {}
+    per_coin, frames, btc_cache = {}, {}, {}
+    use_btc = "--no-btc-regime" not in sys.argv
     log(f"  V29: Supertrend + EMA(8/21) + ADX>{ADX_T:.0f}, 1h bars, long AND short")
+    if use_btc:
+        if os.path.exists(f"{PERP}/BTC_1h.csv"):
+            log("  BTC MACD regime sizing: ON (trades fighting BTC -> 1/4 size)")
+        else:
+            log("  BTC MACD regime: NO BTC_1h.csv -- running WITHOUT the chop")
+            log("  filter that was added to fix exactly this strategy's")
+            log("  weakness. Results will UNDERSTATE V29. Fetch BTC first.")
+    else:
+        log("  BTC MACD regime sizing: OFF (--no-btc-regime)")
     log(f"  {sims} random-timing draws\n")
     log(f"  {'coin':<7}{'trades':>8}{'mean/trade':>12}{'total':>10}"
-        f"{'buy&hold':>11}{'beats B&H':>11}")
+        f"{'buy&hold':>11}{'beats B&H':>11}{'1/4 sz':>9}")
     for coin, (p, m) in COIN_CONFIGS.items():
         f = f"{PERP}/{coin}_1h.csv"
         if not os.path.exists(f):
@@ -272,19 +317,25 @@ def main() -> int:
         if df is None or len(df) < 2000:
             log(f"  {coin:<7} only {len(df)} bars -- SKIPPED")
             continue
-        rr = run_coin(coin, df)
+        btc = btc_macd_dir(df.index) if use_btc else None
+        rr = run_coin(coin, df, btc=btc)
         if not rr:
             log(f"  {coin:<7} no trades -- SKIPPED")
             continue
-        tot = float(np.sum(rr))
+        r_ = np.array([x[0] for x in rr]); w_ = np.array([x[1] for x in rr])
+        tot = float(np.sum(r_ * w_))           # weighted: quarter-size trades
+        wmean = float(np.sum(r_ * w_) / np.sum(w_))   # per unit of risk
         bh = float(df["close"].values[-1] / df["open"].values[0] - 1)
         per_coin[coin] = rr
         frames[coin] = df
+        btc_cache[coin] = btc
         all_real += rr
-        rows.append((coin, len(rr), float(np.mean(rr)), tot, bh))
+        n_cut = int((w_ < 1.0).sum())
+        rows.append((coin, len(rr), wmean, tot, bh, n_cut))
         bh_rows.append(bh)
-        log(f"  {coin:<7}{len(rr):>8}{np.mean(rr)*100:>11.3f}%{tot*100:>9.1f}%"
-            f"{bh*100:>10.1f}%{('YES' if tot > bh else 'no'):>11}")
+        log(f"  {coin:<7}{len(rr):>8}{wmean*100:>11.3f}%{tot*100:>9.1f}%"
+            f"{bh*100:>10.1f}%{('YES' if tot > bh else 'no'):>11}"
+            f"{n_cut:>9}")
 
     if not rows:
         log("  no coin produced trades")
@@ -306,7 +357,8 @@ def main() -> int:
     log("  same TP, same trailing exit. Only the entry bar is random.")
     import zlib
     rng = np.random.default_rng(zlib.crc32(b"v29"))
-    real = float(np.mean(all_real))
+    _r = np.array([x[0] for x in all_real]); _w = np.array([x[1] for x in all_real])
+    real = float(np.sum(_r * _w) / np.sum(_w))
     nulls = []
     for s in range(sims):
         acc = []
@@ -316,9 +368,11 @@ def main() -> int:
             picks = [(int(x), int(sd)) for x, sd in
                      zip(rng.integers(60, n - 60, size=len(rr)),
                          rng.choice([1, -1], size=len(rr)))]
-            acc += run_coin(coin, df, entries_override=picks)
+            acc += run_coin(coin, df, entries_override=picks,
+                            btc=btc_cache.get(coin))
         if acc:
-            nulls.append(float(np.mean(acc)))
+            ar = np.array([x[0] for x in acc]); aw = np.array([x[1] for x in acc])
+            nulls.append(float(np.sum(ar * aw) / np.sum(aw)))
         if s == 0:
             log(f"    (one draw takes a moment; {sims} to go)")
     nulls = np.array(nulls)
