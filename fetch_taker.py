@@ -85,6 +85,18 @@ SCANNER_COINS = [
 
 
 def coins():
+    # --coin X [Y ...] fetches named coins, INCLUDING BTC. Every other path
+    # excludes BTC because it is the market factor for the cross-sectional
+    # sleeves -- but V29's BTC MACD regime overlay needs BTC's own bars, so
+    # there has to be a way to ask for it.
+    if "--coin" in sys.argv:
+        i = sys.argv.index("--coin") + 1
+        out = []
+        while i < len(sys.argv) and not sys.argv[i].startswith("--"):
+            out.append(sys.argv[i].upper())
+            i += 1
+        if out:
+            return out
     if "--scanner" in sys.argv:
         return sorted(c for c in SCANNER_COINS if c != "BTC")
     names = {os.path.basename(f).replace("_1h.csv", "")
