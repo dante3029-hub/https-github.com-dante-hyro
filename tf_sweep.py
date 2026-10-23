@@ -50,7 +50,10 @@ import numpy as np
 
 import v29_test as V
 
-TFS = (1, 2, 4, 6, 12, 24)
+# Fine grid around the 1h->12h rise. A plateau and a spike are
+# indistinguishable at 2x spacing, and the first sweep produced exactly
+# that ambiguity: 0.063 -> 0.159 -> 0.707 -> -1.812.
+TFS = (1, 2, 4, 6, 8, 10, 12, 14, 16, 20, 24)
 
 
 def log(m=""):
@@ -64,7 +67,7 @@ def main() -> int:
     log(f"  Fee is {bar_mkt:.3f}% per round trip at ANY timeframe --")
     log(f"  that is the whole point.\n")
     log(f"  {'tf':>5}{'trades':>9}{'net/trade':>12}{'gross/trade':>13}"
-        f"{'total':>10}{'clears':>12}")
+        f"{'total':>10}{'buy&hold':>10}{'beat':>7}{'clears':>10}")
 
     rows = []
     for tf in TFS:
@@ -81,6 +84,7 @@ def main() -> int:
         finally:
             sys.argv = argv
         n = tot = 0
+        bh = float("nan")
         nets = []
         for ln in txt.splitlines():
             p = ln.split()
@@ -91,6 +95,11 @@ def main() -> int:
                     continue
                 n += cnt
                 nets += [mean] * cnt
+            if ln.strip().startswith("buy & hold"):
+                try:
+                    bh = float(ln.split()[-1].rstrip("%"))
+                except ValueError:
+                    pass
             if ln.strip().startswith("V29 total"):
                 try:
                     tot = float(ln.split()[-1].rstrip("%"))
@@ -103,9 +112,10 @@ def main() -> int:
         gross = net + bar_mkt
         clears = ("MARKET" if gross > bar_mkt else
                   "maker" if gross > bar_mak else "no")
-        rows.append((tf, n, net, gross, tot))
+        rows.append((tf, n, net, gross, tot, bh))
+        beat = "YES" if (np.isfinite(bh) and tot > bh) else "no"
         log(f"  {tf:>4}h{n:>9,}{net:>11.3f}%{gross:>12.3f}%"
-            f"{tot:>9.1f}%{clears:>12}")
+            f"{tot:>9.1f}%{bh:>10.1f}%{beat:>7}{clears:>10}")
 
     if len(rows) < 3:
         return 0
@@ -128,9 +138,29 @@ def main() -> int:
             log(f"  effect. Do not take the maximum.")
         else:
             log(f"  non-monotone but no spike -- treat as a plateau.")
-    if g.max() > bar_mkt:
-        log(f"  {t[best]}h clears the MARKET-order bar ({bar_mkt:.3f}%).")
-        log(f"  V29 was not broken. It was run at the wrong speed.")
+    spike = False
+    nb = [g[i] for i in (best - 1, best + 1) if 0 <= i < len(g)]
+    if nb and (g[best] - max(nb)) > 0.05:
+        spike = True
+
+    # A spike DISQUALIFIES the maximum. Previously this printed the spike
+    # warning and then "V29 was not broken" immediately after, which is two
+    # opposite conclusions in consecutive lines.
+    if spike:
+        log(f"  The best timeframe is DISQUALIFIED as a spike. Judge the")
+        log(f"  curve by its NEIGHBOURS, not its peak: the second-best")
+        log(f"  cluster is what you could actually trade.")
+        order = np.argsort(g)[::-1]
+        second = [i for i in order if i != best]
+        if second:
+            i2 = second[0]
+            log(f"  Next best: {t[i2]}h at {g[i2]:+.3f}% gross "
+                f"({'clears' if g[i2] > bar_mkt else 'does NOT clear'} "
+                f"{bar_mkt:.3f}%).")
+    elif g.max() > bar_mkt:
+        log(f"  {t[best]}h clears the MARKET-order bar ({bar_mkt:.3f}%) and")
+        log(f"  is NOT a spike -- its neighbours support it.")
+        log(f"  V29 may have been run at the wrong speed.")
     elif g.max() > bar_mak:
         log(f"  {t[best]}h clears the MAKER bar ({bar_mak:.3f}%) but not")
         log(f"  market. Tradeable only with passive fills.")
