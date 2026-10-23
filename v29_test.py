@@ -292,6 +292,19 @@ def main() -> int:
     if "--sims" in sys.argv:
         sims = int(sys.argv[sys.argv.index("--sims") + 1])
 
+    # --all-coins: every coin in taker_data, using V29's own default
+    # (21, 2.0) for anything outside COIN_CONFIGS -- which is exactly what
+    # strategy.get_coin_config does live. The point is the DISTRIBUTION:
+    # if V29 only works on a lucky subset, the lineup was the edge, not the
+    # strategy, and the owner's own notes already flag coin ordering moving
+    # returns 15-23%.
+    if "--all-coins" in sys.argv:
+        import glob as _g
+        for _f in sorted(_g.glob(f"{PERP}/*_1h.csv")):
+            _c = os.path.basename(_f).replace("_1h.csv", "")
+            if _c != "BTC":
+                COIN_CONFIGS.setdefault(_c, (21, 2.0))
+
     rows, bh_rows, all_real = [], [], []
     per_coin, frames, btc_cache = {}, {}, {}
     use_btc = "--no-btc-regime" not in sys.argv
@@ -352,6 +365,39 @@ def main() -> int:
     log("  " + "=" * 64)
 
     # ---- random-timing null: same trade count, same exits ----------------
+    # ---- how lucky was the lineup? ---------------------------------------
+    if len(rows) >= 14:
+        import zlib as _z
+        _rng = np.random.default_rng(_z.crc32(b"lineup"))
+        tots = np.array([r[3] for r in rows])
+        bhs = np.array([r[4] for r in rows])
+        k = min(14, len(tots))
+        draws = np.array([tots[_rng.choice(len(tots), k, replace=False)].mean()
+                          for _ in range(20000)])
+        bdraws = np.array([bhs[_rng.choice(len(bhs), k, replace=False)].mean()
+                           for _ in range(20000)])
+        log("")
+        log("  " + "=" * 64)
+        log(f"  WAS THE LINEUP LUCK? 20,000 random {k}-coin subsets")
+        log("  " + "=" * 64)
+        log(f"    coins tested                 {len(tots)}")
+        log(f"    positive on their own        "
+            f"{int((tots > 0).sum())}/{len(tots)}")
+        log(f"    mean {k}-coin lineup          {draws.mean()*100:>+7.1f}%")
+        log(f"    best  / worst lineup         {draws.max()*100:>+7.1f}% / "
+            f"{draws.min()*100:+.1f}%")
+        log(f"    P(a random lineup profits)   "
+            f"{(draws > 0).mean()*100:>6.1f}%")
+        log(f"    P(it beats buy-and-hold)     "
+            f"{(draws > bdraws).mean()*100:>6.1f}%")
+        if (draws > 0).mean() < 0.25:
+            log(f"    -> fewer than 1 in 4 lineups make money. A lineup that")
+            log(f"       DID is a draw from this distribution, not evidence")
+            log(f"       the strategy works.")
+        elif (draws > 0).mean() > 0.75:
+            log(f"    -> most lineups make money. The result does NOT depend")
+            log(f"       on picking the right coins.")
+
     log("")
     log("  RANDOM-TIMING CONTROL -- same coins, same trade count, same stop,")
     log("  same TP, same trailing exit. Only the entry bar is random.")
