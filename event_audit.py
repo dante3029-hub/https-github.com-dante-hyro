@@ -244,6 +244,34 @@ def main() -> int:
             log(f"    VERDICT: beats random timing. The entry rule adds value.")
         log("")
 
+    # ---- leave-one-coin-out on anything that passed ----------------------
+    # relvol leans on ZEC for a third of its Sharpe and skew/delta collapse
+    # without it. A per-trade edge averaged over 63 coins can hide the same
+    # thing, so every passing sleeve gets the test before it earns size.
+    for r in out:
+        if r["p"] > 0.05:
+            continue
+        pc = r["per_coin"]
+        base = float(np.mean([x for v in pc.values() for x in v]))
+        drops = []
+        for c in pc:
+            rest = [x for k, v in pc.items() if k != c for x in v]
+            if rest:
+                drops.append((c, float(np.mean(rest)) - base))
+        drops.sort(key=lambda x: x[1])
+        log(f"  LEAVE-ONE-COIN-OUT: {r['sleeve']} (base {base*100:+.3f}%/trade)")
+        log("    most damaging to drop: " + ", ".join(
+            f"{c} ({d*100:+.3f}%)" for c, d in drops[:4]))
+        worst = -drops[0][1] if drops else 0.0
+        share = worst / base * 100 if base > 0 else 0.0
+        if share > 25:
+            log(f"    CONCENTRATED: dropping {drops[0][0]} costs "
+                f"{share:.0f}% of the edge. One coin is carrying it.")
+        else:
+            log(f"    BROAD: the worst single coin is {share:.0f}% of the "
+                f"edge. Not resting on one name.")
+        log("")
+
     if out:
         log("  " + "=" * 62)
         log(f"  {'sleeve':<10}{'trades':>8}{'real':>10}{'null':>10}"
