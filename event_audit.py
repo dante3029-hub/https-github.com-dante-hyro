@@ -123,6 +123,16 @@ def real_entries(coin, sleeve, df):
     """Entry bars the live detector actually produces."""
     p = PARAMS[sleeve]
     try:
+        if sleeve == 'pattern':
+            # pattern is MarkitTick, NOT the sr break detector. Running
+            # sleeve_sr here gave pattern and sr identical trade counts
+            # (2,290) and meant pattern was never actually tested.
+            # FastPattern indexes by the DETECTION bar -- entering at the
+            # historical break bar the detector also reports is lookahead
+            # and once inflated a backtest from 1.04 to 6.06.
+            from fast_detect import FastPattern
+            fp = FastPattern(df, bull_only=True)
+            return [i + 1 for i in range(len(df) - 1) if fp.fired(i) == 1], None
         if sleeve == 'fvg':
             import sleeve_fvg as M
             tr = M.backtest(df, None, stop_atr=p['stop_atr'], hold=p['hold'])
@@ -132,17 +142,22 @@ def real_entries(coin, sleeve, df):
                             stop_atr=p['stop_atr'], hold=p['hold'])
     except Exception as e:
         return None, f"{type(e).__name__}: {e}"
-    idx = list(df.index)
-    pos = {t: i for i, t in enumerate(idx)}
-    ebs = []
-    for t in tr:
-        ts = t[0]
-        if ts in pos:
-            ebs.append(pos[ts] + 1)      # entry is the bar AFTER the signal
+    pos = {t: i for i, t in enumerate(df.index)}
+    ebs = [pos[t[0]] + 1 for t in tr if t[0] in pos]
     return ebs, None
 
 
-def audit_sleeve(sleeve, coins, sims, rng):
+def audit_sleeve(sleeve, coins, sims, rng=None):
+    # Independent, name-seeded RNG per sleeve. A SHARED generator meant
+    # fvg drew different nulls depending on what ran before it, and its
+    # verdict flipped between 'exposure' (p=0.109) and 'SIGNAL'
+    # (p=0.040) across two runs of the SAME test on the SAME data.
+    # A conclusion that depends on RNG state is not a conclusion.
+    # zlib.crc32, NOT hash(): Python randomises string hashing per process
+    # (PYTHONHASHSEED), so hash() gave a different seed every run and fvg
+    # still drifted 0.707 -> 0.756 across two invocations. crc32 is stable.
+    import zlib
+    rng = np.random.default_rng(zlib.crc32(sleeve.encode()))
     p = PARAMS[sleeve]
     real_all, null_all = [], [[] for _ in range(sims)]
     per_coin, skipped = {}, 0
@@ -190,7 +205,7 @@ def main() -> int:
     if PERP is None:
         log("  cannot find taker_data; tried: " + ", ".join(_TRIED))
         return 2
-    sims = 100
+    sims = 500
     if "--sims" in sys.argv:
         sims = int(sys.argv[sys.argv.index("--sims") + 1])
     want = list(PARAMS) if "--all" in sys.argv else list(LIVE)
@@ -199,11 +214,12 @@ def main() -> int:
     log(f"  {len(coins)} coins, {sims} random-timing draws per sleeve")
     log(f"  auditing: {', '.join(want)}\n")
 
-    rng = np.random.default_rng(20261022)
+    floor = 1.0 / (1.0 + sims)
+    log(f"  smallest p this many draws can express: {floor:.4f}\n")
     out = []
     for s in want:
         log(f"  {s}: running...")
-        r = audit_sleeve(s, coins, sims, rng)
+        r = audit_sleeve(s, coins, sims)
         if r is None:
             log(f"  {s}: no trades produced -- SKIPPED (not 'passed')\n")
             continue
@@ -216,6 +232,10 @@ def main() -> int:
         log(f"    random-timing null           {nm*100:>+7.3f}% "
             f"+- {ns*100:.3f}%   (z {z:+.2f})")
         log(f"    p(random >= real)            {r['p']:.3f}")
+        if abs(r["p"] - 0.05) < 2 * floor:
+            log(f"    BORDERLINE: p={r['p']:.3f} is within the resolution of")
+            log(f"               {sims} draws. Re-run with --sims 2000 before")
+            log(f"               treating this as either answer.")
         if r["p"] > 0.05:
             log(f"    VERDICT: does NOT beat random timing. This sleeve is")
             log(f"             exposure, not a signal, and its fees are a")
