@@ -220,17 +220,42 @@ def btc_macd_dir(bars_index):
     return s.reindex(bars_index, method="ffill")
 
 
-def run_coin(coin, df, entries_override=None, btc=None):
-    """Returns list of trade returns. entries_override replaces the signal
-    with a given list of entry bars -- the random-timing control uses the
-    SAME exit machinery, which is the whole point."""
+_IND = {}
+
+
+def indicators(coin, df):
+    """Supertrend/ATR/EMA/ADX for one coin at the current TF, cached.
+
+    None of these depend on the entry list, but run_coin recomputed all four
+    on every call -- four pure-Python bar loops. The random-timing null calls
+    run_coin sims x coins times, so at 200 draws over 63 coins that was
+    50,000 redundant indicator passes and the null did not finish on a
+    1-vCPU box. Keyed on the frame's identity as well as the coin, so a
+    resampled or sliced frame never collides with the full one.
+    """
     p, m = COIN_CONFIGS[coin]
+    key = (coin, TF, p, m, len(df),
+           int(df.index[0].value), int(df.index[-1].value))
+    hit = _IND.get(key)
+    if hit is not None:
+        return hit
+    h = df["high"].values; l = df["low"].values; c = df["close"].values
+    tr, fu, fl = supertrend(h, l, c, p, m)
+    bundle = (tr, fu, fl, atr(h, l, c, 14),
+              ema(c, EMA_F), ema(c, EMA_S), adx(h, l, c, ADX_P))
+    _IND[key] = bundle
+    return bundle
+
+
+def run_coin(coin, df, entries_override=None, btc=None):
+    """Returns list of (net_return, size_weight, entry_bar, side).
+
+    entries_override replaces the signal with a given list of entry bars --
+    the random-timing control uses the SAME exit machinery, which is the
+    whole point."""
     o = df["open"].values; h = df["high"].values
     l = df["low"].values;  c = df["close"].values
-    tr, fu, fl = supertrend(h, l, c, p, m)
-    a = atr(h, l, c, 14)
-    ef, es = ema(c, EMA_F), ema(c, EMA_S)
-    ax = adx(h, l, c, ADX_P)
+    tr, fu, fl, a, ef, es, ax = indicators(coin, df)
     n = len(c)
 
     sigs = []
@@ -300,7 +325,7 @@ def run_coin(coin, df, entries_override=None, btc=None):
             d = btc.iloc[eb] if eb < len(btc) else np.nan
             if np.isfinite(d) and d != 0 and int(d) == -side:
                 w = 0.25          # FIGHTS BTC MACD -> quarter size
-        out.append((realised - 2 * FEE, w, eb))
+        out.append((realised - 2 * FEE, w, eb, side))
         last_exit = ex
     return out
 

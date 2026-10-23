@@ -130,14 +130,13 @@ def main() -> int:
     log(f"  gross per trade: " + " -> ".join(f"{x:+.3f}" for x in g))
     if mono:
         log(f"  MONOTONE with timeframe -- the mechanical prediction holds.")
-    else:
-        nb = [g[i] for i in (best - 1, best + 1) if 0 <= i < len(g)]
-        if nb and g[best] - max(nb) > 0.05:
-            log(f"  SPIKE at {t[best]}h, {g[best]-max(nb):+.3f}% above its")
-            log(f"  neighbours. That is the fitted-parameter shape, not an")
-            log(f"  effect. Do not take the maximum.")
-        else:
-            log(f"  non-monotone but no spike -- treat as a plateau.")
+    # The old SPIKE test lived here and still printed after the replacement
+    # below was added, so the report asserted "SPIKE ... not an effect. Do
+    # not take the maximum." and "a HUMP, peak is supported" four lines
+    # apart, in the same run. Two opposite verdicts in one output is worse
+    # than either verdict alone -- the reader picks the one they like.
+    # Deleted, not reworded.
+    #
     # A SPIKE is an isolated point. A HUMP is a run of elevated neighbours
     # rising to a peak. The old test compared the max to a fixed 0.05 gap,
     # which on a smooth curve always fires -- the maximum is by definition
