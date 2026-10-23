@@ -279,7 +279,7 @@ def run_coin(coin, df, entries_override=None, btc=None):
             d = btc.iloc[eb] if eb < len(btc) else np.nan
             if np.isfinite(d) and d != 0 and int(d) == -side:
                 w = 0.25          # FIGHTS BTC MACD -> quarter size
-        out.append((realised - 2 * FEE, w))
+        out.append((realised - 2 * FEE, w, eb))
         last_exit = ex
     return out
 
