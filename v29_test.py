@@ -276,16 +276,22 @@ def run_coin(coin, df, entries_override=None, btc=None):
                 if (not got1) and h[j] >= tp1:
                     realised += TP1_FRAC * (tp1 / ent - 1); got1 = True
                     stop = max(stop, ent)            # runner to breakeven
-                if got1 and np.isfinite(fl[j]) and c[j] < fl[j]:
-                    realised += (1 - TP1_FRAC) * (c[j] / ent - 1); break
+                # Supertrend trail is the EXIT and is live from entry --
+                # config has use_supertrend_trailing=True unconditionally.
+                # Gating it on got1 meant a trade that never reached TP1 and
+                # never hit its stop ran to the END OF THE DATA. Rare at 1h,
+                # common at 20-24h where the ATR stop is very wide in percent
+                # terms, which is almost certainly the long-end collapse.
+                if np.isfinite(fl[j]) and c[j] < fl[j]:
+                    realised += (1 - got1 * TP1_FRAC) * (c[j] / ent - 1); break
             else:
                 if h[j] >= stop:
                     realised += (1 - got1 * TP1_FRAC) * (1 - stop / ent); break
                 if (not got1) and l[j] <= tp1:
                     realised += TP1_FRAC * (1 - tp1 / ent); got1 = True
                     stop = min(stop, ent)
-                if got1 and np.isfinite(fu[j]) and c[j] > fu[j]:
-                    realised += (1 - TP1_FRAC) * (1 - c[j] / ent); break
+                if np.isfinite(fu[j]) and c[j] > fu[j]:
+                    realised += (1 - got1 * TP1_FRAC) * (1 - c[j] / ent); break
         else:
             realised += (1 - got1 * TP1_FRAC) * (
                 (c[n - 1] / ent - 1) * side)

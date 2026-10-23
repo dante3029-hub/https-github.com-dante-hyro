@@ -138,10 +138,19 @@ def main() -> int:
             log(f"  effect. Do not take the maximum.")
         else:
             log(f"  non-monotone but no spike -- treat as a plateau.")
-    spike = False
+    # A SPIKE is an isolated point. A HUMP is a run of elevated neighbours
+    # rising to a peak. The old test compared the max to a fixed 0.05 gap,
+    # which on a smooth curve always fires -- the maximum is by definition
+    # above its neighbours. It mislabelled a six-point hump as a spike.
+    #
+    # Now: count how many points are above half the peak. One or two means
+    # isolated; four or more means the peak sits on a structure.
+    half = g[best] / 2.0
+    elevated = int((g > half).sum()) if g[best] > 0 else 0
     nb = [g[i] for i in (best - 1, best + 1) if 0 <= i < len(g)]
-    if nb and (g[best] - max(nb)) > 0.05:
-        spike = True
+    spike = elevated <= 2 and bool(nb) and (g[best] - max(nb)) > 0.05
+    log(f"  points above half the peak: {elevated}/{len(g)}"
+        f"  -> {'isolated SPIKE' if spike else 'a HUMP, peak is supported'}")
 
     # A spike DISQUALIFIES the maximum. Previously this printed the spike
     # warning and then "V29 was not broken" immediately after, which is two
