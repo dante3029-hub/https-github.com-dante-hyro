@@ -119,12 +119,33 @@ SLEEVE_CONVICTION = {
                       # 1.01 -> 0.33 without ZEC.
     'skew':   0.15,   # 0.82 Sharpe but 90% STATIC -> timing part ~0.08.
                       # 0.82 -> 0.29 without ZEC. Was 40% of gross.
-    # --- UNAUDITED: left at 1.0, which is not a pass -------------------------
-    # fvg, pattern, sr, srflip, cascade. These are EVENT sleeves and the
-    # static-tilt test does not apply to them -- "the average weight vector"
-    # is meaningless for a book holding three names on its own schedule. They
-    # need a random-timing control (same coins, same trade count, same hold,
-    # random entries) before any of these numbers mean anything.
+    # --- EVENT sleeves, random-timing control, 2000 draws, CORE24 caveat --
+    # The null holds coin, trade count, hold, stop and the exit walk
+    # IDENTICAL; only the entry bar is randomised, which is the sleeve's
+    # entire claim. Run over 63 coins (the audit globbed taker_data) while
+    # the live sleeves trade CORE24, so the RANKING is sound and the
+    # magnitudes want re-checking on the live universe.
+    'pattern': 1.00,  # z +4.31, p<0.001, survives Bonferroni x4 (0.002).
+                      # Leave-one-out BROAD: worst coin 11% of the edge.
+                      # +0.869%/trade vs a +0.043% null, ~15 trades per coin
+                      # per year so almost no fee drag. Strongest measured
+                      # result in the book -- and it held $2,500 of $90,000
+                      # because it had never been tested.
+    'sr':      1.00,  # z +1.93, p=0.025 -- but Bonferroni x4 gives 0.10, so
+                      # SUGGESTIVE, not established. Leave-one-out 25% on its
+                      # worst coin, right at the concentration threshold.
+                      # Full weight because it currently holds ZERO legs;
+                      # why it never fires is a wiring question, not a
+                      # sizing one, and must be answered before this matters.
+    'fvg':     0.25,  # z +1.44, p=0.077 -- does NOT beat random timing.
+                      # Held the LARGEST event allocation ($15,000) on no
+                      # evidence. 26,283 trades, so it also pays the most
+                      # fees of any event sleeve to do it.
+    'srflip':  0.20,  # z +1.19, p=0.123 -- exposure.
+    'cascade': 1.00,  # untested and untestable this way: it fires only on a
+                      # market-wide crash (z <= -2.5) and has produced zero
+                      # legs, so there is no sample. Left alone because it
+                      # costs nothing while idle, NOT because it passed.
 }
 DEFAULT_CONVICTION = 1.0
 
