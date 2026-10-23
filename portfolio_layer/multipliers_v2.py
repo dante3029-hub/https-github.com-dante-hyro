@@ -125,12 +125,38 @@ SLEEVE_CONVICTION = {
     # entire claim. Run over 63 coins (the audit globbed taker_data) while
     # the live sleeves trade CORE24, so the RANKING is sound and the
     # magnitudes want re-checking on the live universe.
-    'pattern': 1.00,  # z +4.31, p<0.001, survives Bonferroni x4 (0.002).
+    'pattern': 2.00,  # OVER-weighted vs equal risk, deliberately. z +4.31,
+                      # p<0.001, survives Bonferroni x4 (0.002).
                       # Leave-one-out BROAD: worst coin 11% of the edge.
                       # +0.869%/trade vs a +0.043% null, ~15 trades per coin
                       # per year so almost no fee drag. Strongest measured
                       # result in the book -- and it held $2,500 of $90,000
                       # because it had never been tested.
+                      #
+                      # WHY 2.0 AND NOT MORE. Equal risk assumes every sleeve
+                      # deserves the same share; pattern has materially more
+                      # evidence than the rest, so it gets more. The ceiling
+                      # is PER-LEG concentration, not conviction: pattern
+                      # fires ~15x per coin per year and holds 3.75 days, so
+                      # on CORE24 it averages only ~3.7 OPEN POSITIONS. Gross
+                      # given to it concentrates into very few legs.
+                      #
+                      #   gross    per leg   25% gap   % of $9,942 daily limit
+                      #  $ 9,250   $ 2,500   $   625          6%   (1.0)
+                      #  $18,500   $ 5,000   $ 1,250         13%   (2.0, here)
+                      #  $37,000   $10,000   $ 2,500         25%   (4.0)
+                      #  $60,000   $16,215   $ 4,054         41%   too much
+                      #
+                      # One leg gapping should not spend half a day's limit.
+                      # That is the FIL scenario, and it is the binding
+                      # constraint -- not the strength of the signal.
+                      #
+                      # 2.0 is also a STAGED move: the z +4.31 was measured on
+                      # 63 coins including duplicate assets (PEPE/1000PEPE,
+                      # SHIB/1000SHIB both present), not on the CORE24 the
+                      # sleeve actually trades. Re-run on CORE24 before going
+                      # higher. A number this strong is the same shape as
+                      # three results in this project that did not survive.
     'sr':      1.00,  # z +1.93, p=0.025 -- but Bonferroni x4 gives 0.10, so
                       # SUGGESTIVE, not established. Leave-one-out 25% on its
                       # worst coin, right at the concentration threshold.
@@ -153,6 +179,9 @@ MIN_OBS_FOR_LIVE = 60      # days of live history before trusting it over the pr
 
 MIN_OBS = 20            # below this, a vol estimate is noise
 MAX_MULT = 4.0          # cap -- a flat sleeve has near-zero vol, not low risk
+MAX_FINAL_MULT = 4.0    # cap on equal-risk x CONVICTION. Conviction is
+                        # unbounded by design, so without this a typo
+                        # (2.0 -> 20.0) would silently size the book 10x.
 MIN_MULT = 0.1
 DEFAULT_MULT = 1.0
 
@@ -256,7 +285,13 @@ def compute_multipliers_equal_risk(
             logger.warning("sleeve %s conviction %.2f -- multiplier %.3f -> "
                            "%.3f (see SLEEVE_CONVICTION for the evidence)",
                            k, conv, v, v * conv)
-        final[k] = v * conv * account_multiplier
+        m = v * conv
+        if m > MAX_FINAL_MULT:
+            logger.warning("sleeve %s final multiplier %.2f capped at %.2f "
+                           "(equal-risk %.2f x conviction %.2f)",
+                           k, m, MAX_FINAL_MULT, v, conv)
+            m = MAX_FINAL_MULT
+        final[k] = m * account_multiplier
     return final
 
 
