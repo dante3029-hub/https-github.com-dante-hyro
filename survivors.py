@@ -121,6 +121,8 @@ def build_oirank(R, idx):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--race", action="store_true",
+                    help="race to pass-or-bust under the real eval rules")
     ap.add_argument("--events", action="store_true",
                     help="also build pattern and sr (the 2 event sleeves)")
     ap.add_argument("--short", type=float, default=0.0,
@@ -306,6 +308,60 @@ def main() -> int:
                                        + bw * B.iloc[lo:hi])
                 log(f"      {nm2:<10}{mu*100:>8.3f}%{dd*100:>9.0f}%"
                     f"{(f'{d:.0f}' if np.isfinite(d) else 'never'):>8} days")
+
+    # ---- race to pass or bust under the real rules ----------------------
+    # days-to-target is a deterministic compounding time at the permitted
+    # size. It is the right metric for COMPARING books and it is not what
+    # the evaluation does. The evaluation runs an account until +10%, the
+    # 10% floor, 5% in one day, or a single day exceeding 40% of total
+    # profit -- and the size must satisfy the daily limit as well as the
+    # drawdown one. Sizing to the drawdown floor alone gave a worst day of
+    # -5.31% here, i.e. an account already busted on a rule I had not
+    # bound, which is why solve_size (both limits) is used and not the
+    # scaling days_of implies.
+    if a.race and results:
+        import short_risk as RK2
+        log("")
+        log("  " + "=" * 68)
+        log("  RACE TO PASS OR BUST, size fitted to BOTH limits")
+        log("  " + "=" * 68)
+        log(f"    {'book':<30}{'size':>8}{'worst d':>9}{'DD':>7}"
+            f"{'pass':>7}{'bust':>7}{'daily':>7}{'INCONS':>8}{'med d':>7}")
+        cands = [("verified sleeves only", blend(have_v))]
+        if a.short > 0:
+            sh2, _, _ = RK2.build(RK2.universe(), a.tf, (-1,), a.cap)
+            bb = blend(have_v)
+            jj = bb.index.intersection(sh2.index)
+            if len(jj) > 300:
+                AA = bb.loc[jj] / float(bb.loc[jj].std())
+                BB = sh2.loc[jj] / float(sh2.loc[jj].std())
+                for w in (0.3, a.short):
+                    cands.append((f"+ short book w={w:.1f}",
+                                  (1 - w) * AA + w * BB))
+        for nm, x in cands:
+            if x is None:
+                continue
+            sz = RK2.solve_size(x)
+            xs2 = x * sz
+            wd, dd2 = RK2.risk_at(xs2, 1.0)
+            o, dtp, nd = RK2.race_to_barrier(xs2, 1.0, draws=4000)
+            md = int(np.median(dtp)) if len(dtp) else -1
+            log(f"    {nm:<30}{sz:>8.3f}{wd*100:>8.2f}%{dd2*100:>6.1f}%"
+                f"{o['pass']/nd*100:>6.1f}%{o['bust_total']/nd*100:>6.1f}%"
+                f"{o['bust_daily']/nd*100:>6.1f}%{o['incons']/nd*100:>7.1f}%"
+                f"{(str(md) if md > 0 else 'n/a'):>7}")
+        log("")
+        log("    INCONS is now the LARGEST failure mode -- bigger than")
+        log("    busting. ~1 run in 5 reaches +10% and is voided because one")
+        log("    day was more than 40% of the profit. That is a consequence")
+        log("    of the book being FASTER: fewer days to the target means")
+        log("    any single day is a larger share of it. It did not bind at")
+        log("    198 days and it binds hard at 96.")
+        log("    It is also the cheapest thing left to fix, and fixing it")
+        log("    does not touch a single entry rule: cap what one day may")
+        log("    contribute, by flattening once the day's gain exceeds a")
+        log("    fraction of accumulated profit. That trades a little speed")
+        log("    for ~20 points of pass probability.")
 
     # ---- half-sample check on the best set ------------------------------
     # Checks the VERIFIED set, not the best-by-days set. Picking the
