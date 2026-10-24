@@ -174,10 +174,21 @@ def build(coins, tf, sides, cap):
 def risk_at(pnl, s):
     """Worst day and max drawdown at per-leg size s. Computed on the scaled
     series rather than by multiplying the unit-size numbers, because
-    drawdown compounds and does not scale linearly."""
+    drawdown compounds and does not scale linearly.
+
+    In LOG space. np.cumprod(1 + v) overflowed to inf at the 1.0x
+    reference size -- 1.0x means a full equity per leg, so with 6-10 legs
+    on it is 6-10x leverage and the product runs away before the series
+    ends. That printed as a numpy RuntimeWarning in the middle of the
+    report and a drawdown of exactly -100.00%, which is not a measurement,
+    it is an overflow. A leg that loses more than 100% is ruin and is
+    clamped, so the drawdown saturates at -100% honestly instead.
+    """
     v = pnl.values * s
-    eq = np.cumprod(1.0 + v)
-    dd = float((eq / np.maximum.accumulate(eq) - 1.0).min())
+    if v.min() <= -1.0:                     # ruin: equity through zero
+        return float(v.min()), -1.0
+    le = np.cumsum(np.log1p(v))             # log equity, no overflow
+    dd = float(np.expm1(le - np.maximum.accumulate(le)).min())
     return float(v.min()), dd
 
 
@@ -348,6 +359,11 @@ def main() -> int:
     log("  " + "=" * 66)
     log("  DAILY MARK-TO-MARKET at 1.0x equity per leg")
     log("  " + "=" * 66)
+    log("    1.0x per leg is a SCALING REFERENCE, not a size anyone would")
+    log(f"    trade: with {int(np.median(cv))} legs on it is"
+        f" {int(np.median(cv))}x leverage, so the drawdown and")
+    log("    total below are ruin by construction. The mean and sd are the")
+    log("    useful rows; everything tradeable is in the next block.")
     log(f"    mean daily                {pnl.mean()*100:>+8.3f}%")
     log(f"    daily sd                  {sd*100:>8.3f}%")
     log(f"    Sharpe (daily, ann.)      {sharpe:>8.2f}")
