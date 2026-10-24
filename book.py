@@ -32,6 +32,31 @@ def panel():
         try: d=load_daily(s)
         except Exception: continue
         if len(d)>=400: fr[s]=d
+    # A missing data directory used to surface as
+    #   TypeError: object of type 'NoneType' has no len()
+    # thirteen lines into build(), because idx stayed None here, panel()
+    # returned it anyway, xs() silently did nothing over an empty range,
+    # and the first line that actually dereferenced idx blew up. The
+    # traceback pointed at a cascade-sleeve statement and named neither
+    # the directory nor the universe, so it read as a bug in the strategy
+    # code rather than "there is no data here".
+    #
+    # An absent input must fail at the point of absence and say what it
+    # looked for. Nothing downstream can diagnose it better.
+    if not fr:
+        found = len(glob.glob(f'{TAKER}/*_1h.csv'))
+        raise FileNotFoundError(
+            f"book.panel(): no usable coin data.\n"
+            f"  TAKER resolved to : {os.path.abspath(TAKER)}\n"
+            f"  exists            : {os.path.isdir(TAKER)}\n"
+            f"  *_1h.csv in it    : {found}\n"
+            f"  CORE24 wanted     : {len(CORE24)} coins, "
+            f"{len(SYMS)} of them present\n"
+            f"  each needs >=400 daily bars after resampling.\n"
+            f"  HYRO_TAKER_DATA_DIR = "
+            f"{os.environ.get('HYRO_TAKER_DATA_DIR') or '<unset>'}\n"
+            f"  If that env var points somewhere stale it overrides the "
+            f"local taker_data/ directory.")
     idx=None
     for d in fr.values(): idx = d.index if idx is None else idx.union(d.index)
     cs=sorted(fr)
