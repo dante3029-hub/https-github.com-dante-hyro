@@ -209,7 +209,7 @@ def long_short_split(per):
         log("    drift, so a profitable short book is the strongest single")
         log("    piece of evidence that the ENTRY RULE is doing work.")
         return "both"
-    if gl > BAR_MKT and gs <= 0:
+    if gl > BAR_MKT and gs <= 0:  # noqa: returns below carry the numbers
         log("    Longs earn it, shorts lose. That is what owning a rising")
         log("    market looks like. The entry rule is picking the direction")
         log("    the market was going anyway, and the hump is hold length.")
@@ -378,10 +378,13 @@ def benchmark_truth(coins):
     log("")
     log("    The benchmark is one coin. Drop the three best and holding this")
     log("    universe LOSES money. So 'V29 does not beat buy-and-hold' was")
-    log("    never the indictment it sounded like -- but the same fact kills")
-    log("    the drift story for LONGS and creates one for SHORTS: the")
-    log("    median coin fell by half, so being short and holding collects")
-    log("    drift here. That is what the by-side null below is for.")
+    log("    never the indictment it sounded like.")
+    log(f"    The median coin fell {abs(np.median(v))*100:.0f}%, which SUGGESTS"
+        f" a short held a few")
+    log("    bars collects downward drift. That is a hypothesis, not a")
+    log("    finding -- stops get hit by the upward spikes alts make on the")
+    log("    way down, so it can go either way. The random-short line in")
+    log("    test 3 measures it. Do not read a cause off this table.")
     return v
 
 
@@ -447,14 +450,32 @@ def short_deep(coins, tfs, sims):
     full_ps = [c[2] for tf in best for c in best[tf] if c[0] == "full"]
     if full_ps:
         bp = min(full_ps)
+        b33, b7 = min(bp * 33, 1.0), min(bp * 7, 1.0)
         log(f"      best full-sample p            {bp:.4f}")
-        log(f"      x33 (Bonferroni, harsh)       {min(bp*33, 1.0):.3f}")
+        log(f"      x33 (Bonferroni, harsh)       {b33:.3f}"
+            f"   {'survives' if b33 <= 0.05 else 'does NOT survive'}")
         log(f"      x7  (timeframes are correlated resamples of the same")
         log(f"          bars, so ~3-4 independent speeds x 2 sides)"
-            f"  {min(bp*7, 1.0):.3f}")
-        log("      Neither survives. What does NOT depend on a p-value is")
-        log("      the sign agreeing in both halves at several adjacent")
-        log("      speeds, which is replication rather than significance.")
+            f"  {b7:.3f}   {'survives' if b7 <= 0.05 else 'does NOT survive'}")
+        # These three lines used to read "Neither survives", hardcoded from
+        # the snapshot I developed on, where the best p was 0.0365 and x7
+        # gave 0.26. On a longer sample with a smaller p the sentence is
+        # simply false, and a static verdict printed under live numbers is
+        # the worst kind of wrong -- it looks computed. Now derived.
+        if b33 <= 0.05:
+            log("      Survives even the harsh correction. That is as close")
+            log("      to a clean statistical result as this project has.")
+        elif b7 <= 0.05:
+            log("      Survives the realistic correction but not Bonferroni.")
+            log("      Bonferroni assumes 33 independent tests and these are")
+            log("      resamples of the same bars, so it is the wrong bound;")
+            log("      it is quoted because picking the generous correction")
+            log("      after seeing the answer is how people fool themselves.")
+        else:
+            log("      Does not survive either correction.")
+        log("      Independent of any p-value: the sign agreeing in both")
+        log("      halves at several adjacent speeds is replication, which")
+        log("      is the evidence that matters here.")
     return best
 
 
@@ -490,6 +511,9 @@ def main() -> int:
     verdicts = {}
     benchmark_truth(list(per))
     verdicts["split"] = long_short_split(per)
+    _allt = [t for v in per.values() for t in v]
+    verdicts["gl"] = gross([t for t in _allt if t[3] == 1])[0]
+    verdicts["gs"] = gross([t for t in _allt if t[3] == -1])[0]
 
     if not a.skip_null:
         log("")
@@ -511,6 +535,9 @@ def main() -> int:
                 f"{d_.std():>9.3f}%{z_:>7.2f}{p_:>9.4f}")
         verdicts["nullB"] = pooled[2]
         verdicts["nullB_short"] = sht[2]
+        verdicts["null_long"] = float(lng[1].mean())
+        verdicts["null_short"] = float(sht[1].mean())
+        verdicts["zl"] = lng[3]
         log("")
         # This branch used to print "the universe fell and shorts held 5-6
         # bars collected that" whenever the short p was above 0.05. The
@@ -570,23 +597,50 @@ def main() -> int:
                                  "halves"))
     for ok, txt in checks:
         log(f"    [{'PASS' if ok else 'FAIL'}]  {txt}")
+    # Everything below used to be static prose carrying the numbers from
+    # the snapshot this file was written on -- including "The LONG book is
+    # noise. It earns less than random entries", which was true there and
+    # false on a longer sample where longs beat their null by +0.26pp.
+    # A hardcoded conclusion printed beneath live numbers reads as though
+    # it were computed from them. Derived now, or not claimed.
     log("")
-    log("  WHAT IS SETTLED, with no p-value needed:")
-    log("    - 1h is structurally dead. ~39,000 trades at +0.05% gross")
-    log("      against a 0.170% round trip. The overtrading was the problem.")
-    log("    - The LONG book is noise. It earns less than random entries at")
-    log("      the same times on the same coins, and pays the full fee.")
-    log("    - The 'buy & hold' benchmark V29 kept losing to is a SUM over")
-    log("      coins dominated by one name. Excluding the top 3, holding")
-    log("      this universe loses money. That comparison proved nothing.")
-    log("")
-    log("  WHAT IS PROMISING AND UNPROVEN:")
-    log("    - Short-only at 10-14h. Clears the cost bar 4-8x over, in both")
-    log("      time halves, and beats its own timing null at nominal p<0.05")
-    log("      at 12h. Does not survive correction for 33 cells examined.")
-    log("      Per-trade sd is ~0.6% on ~1,500 trades, so this sample")
-    log("      cannot resolve it. The next evidence has to come forward,")
-    log("      not from more passes over the same bars.")
+    log("  WHAT THIS RUN SETTLES:")
+    log("    - Fast trading is structurally dead: at 1h the gross edge is a")
+    log("      fraction of the 0.170% round trip, over tens of thousands of")
+    log("      trades. The overtrading was the problem.")
+    log("    - The benchmark was never real: 'buy & hold' is a SUM over the")
+    log("      universe dominated by its best name, and excluding the top 3")
+    log("      holding it loses money. That comparison proved nothing.")
+    gl_, gs_ = verdicts.get("gl"), verdicts.get("gs")
+    nl_, ns_ = verdicts.get("null_long"), verdicts.get("null_short")
+    if None not in (gl_, nl_):
+        if gl_ <= nl_:
+            log(f"    - The LONG book is noise: {gl_:+.3f}% against"
+                f" {nl_:+.3f}% for random")
+            log("      entries at the same times on the same coins. It is")
+            log("      worse than random and pays the full fee.")
+        elif gl_ > BAR_MKT:
+            log(f"    - The LONG book clears the cost bar ({gl_:+.3f}%) but is"
+                f" NOT")
+            log(f"      distinguishable from random timing ({nl_:+.3f}%,"
+                f" z={verdicts.get('zl', float('nan')):+.2f}).")
+            log("      Treat it as exposure, not signal: it is the natural")
+            log("      hedge against the short book's squeeze risk, which is")
+            log("      a reason to keep it, but not evidence it works.")
+        else:
+            log(f"    - The LONG book does not clear the cost bar"
+                f" ({gl_:+.3f}%).")
+    if None not in (gs_, ns_):
+        log(f"    - The SHORT book earns {gs_:+.3f}% while a randomly timed")
+        log(f"      short earns {ns_:+.3f}%."
+            + ("  A random short LOSES money here,"
+               if ns_ < 0 else "  "))
+        if ns_ < 0:
+            log("      so the short result is NOT downward drift. The entry")
+            log("      stack is avoiding the upward spikes that stop a short")
+            log("      out -- it is a squeeze filter, which is exactly the")
+            log("      'chop' problem the ATR and BTC-MACD overlays were")
+            log("      added to fix.")
     log("")
     log("  THE RISK, which is not a statistical point:")
     log("    A short-only book across 60 alts is one position, not sixty.")

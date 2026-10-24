@@ -325,7 +325,12 @@ def run_coin(coin, df, entries_override=None, btc=None):
             d = btc.iloc[eb] if eb < len(btc) else np.nan
             if np.isfinite(d) and d != 0 and int(d) == -side:
                 w = 0.25          # FIGHTS BTC MACD -> quarter size
-        out.append((realised - 2 * FEE, w, eb, side))
+        # sl_frac: the stop distance as a fraction of entry. A daily
+        # mark-to-market reconstruction needs this, because marking a leg
+        # close-to-close through its stop charges the book a loss the
+        # strategy never took -- the position was already flat.
+        out.append((realised - 2 * FEE, w, eb, side, ex,
+                    SL_ATR * aa / ent))
         last_exit = ex
     return out
 
