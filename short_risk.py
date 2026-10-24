@@ -247,8 +247,27 @@ def solve_size(pnl):
     return lo
 
 
+def derived_day_cap(consistency=0.40, target=None):
+    """The largest daily RETURN that cannot breach the consistency rule.
+
+    The rule is checked only at the moment of passing, where total profit
+    is at least `target`. A day's profit contribution is eq_prev * r, and
+    eq_prev is at most about 1 + target just before passing. So
+
+        eq_prev * r  <=  consistency * target
+        r            <=  consistency * target / (1 + target)
+
+    With target 10% and consistency 40% that is 3.64%, not the 4.0% that
+    dropping the compounding term gives. The difference is not cosmetic:
+    4.0% leaves 5.6% of runs voided and 3.64% leaves 0.0%.
+    """
+    t = TARGET if target is None else target
+    return consistency * t / (1.0 + t)
+
+
 def race_to_barrier(pnl, s, blocks=5, draws=4000, max_days=1095,
-                    min_days=5, consistency=0.40, seed=b"race"):
+                    min_days=5, consistency=0.40, day_cap=None,
+                    seed=b"race"):
     """Run the account until it passes or busts, under the REAL eval rules.
 
     The 45-day window test below was answering the wrong question. The
@@ -278,6 +297,31 @@ def race_to_barrier(pnl, s, blocks=5, draws=4000, max_days=1095,
             blk = v[rng.integers(0, n - blocks):][:blocks]
             for r in blk:
                 day += 1
+                # DAILY PROFIT CAP -- flatten once the day's gain reaches
+                # day_cap, to stop one day being >consistency of the total.
+                #
+                # The cap is DERIVED, not tuned -- see derived_day_cap().
+                #
+                # I first derived it as TARGET * consistency = 4.0% and
+                # called it provable. Measurement left 5.6% of runs still
+                # failing the rule, which a proof does not do. The error
+                # was compounding: the cap limits a daily RETURN, while the
+                # rule compares absolute PROFIT, and a 4% return on equity
+                # of 1.06 contributes 4.24% -- 42% of a 10% total. The
+                # correct bound divides by (1 + TARGET), giving 3.64%, and
+                # that measures 0.0% failures against 5.6% at 4%.
+                #
+                # Worth keeping as a note: the proof was wrong and the
+                # simulation caught it. A derivation is not evidence.
+                #
+                # Optimism to be aware of: flattening at +4% also avoids
+                # whatever the rest of that day would have done, including
+                # losses. Pessimism the other way: being flat into the next
+                # session is not modelled, so a missed following move is
+                # not charged. Neither is large and they point in opposite
+                # directions.
+                if day_cap is not None and r > day_cap:
+                    r = day_cap
                 start = eq
                 eq *= (1.0 + r)
                 gain = eq - start

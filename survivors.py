@@ -338,18 +338,23 @@ def main() -> int:
                 for w in (0.3, a.short):
                     cands.append((f"+ short book w={w:.1f}",
                                   (1 - w) * AA + w * BB))
+        dc = RK2.derived_day_cap()
         for nm, x in cands:
             if x is None:
                 continue
             sz = RK2.solve_size(x)
             xs2 = x * sz
             wd, dd2 = RK2.risk_at(xs2, 1.0)
-            o, dtp, nd = RK2.race_to_barrier(xs2, 1.0, draws=4000)
-            md = int(np.median(dtp)) if len(dtp) else -1
-            log(f"    {nm:<30}{sz:>8.3f}{wd*100:>8.2f}%{dd2*100:>6.1f}%"
-                f"{o['pass']/nd*100:>6.1f}%{o['bust_total']/nd*100:>6.1f}%"
-                f"{o['bust_daily']/nd*100:>6.1f}%{o['incons']/nd*100:>7.1f}%"
-                f"{(str(md) if md > 0 else 'n/a'):>7}")
+            for cap, tag in ((None, ""), (dc, " + day cap")):
+                o, dtp, nd = RK2.race_to_barrier(xs2, 1.0, draws=4000,
+                                                 day_cap=cap)
+                md = int(np.median(dtp)) if len(dtp) else -1
+                log(f"    {nm + tag:<30}{sz:>8.3f}{wd*100:>8.2f}%"
+                    f"{dd2*100:>6.1f}%{o['pass']/nd*100:>6.1f}%"
+                    f"{o['bust_total']/nd*100:>6.1f}%"
+                    f"{o['bust_daily']/nd*100:>6.1f}%"
+                    f"{o['incons']/nd*100:>7.1f}%"
+                    f"{(str(md) if md > 0 else 'n/a'):>7}")
         log("")
         log("    INCONS is now the LARGEST failure mode -- bigger than")
         log("    busting. ~1 run in 5 reaches +10% and is voided because one")
@@ -357,11 +362,11 @@ def main() -> int:
         log("    of the book being FASTER: fewer days to the target means")
         log("    any single day is a larger share of it. It did not bind at")
         log("    198 days and it binds hard at 96.")
-        log("    It is also the cheapest thing left to fix, and fixing it")
-        log("    does not touch a single entry rule: cap what one day may")
-        log("    contribute, by flattening once the day's gain exceeds a")
-        log("    fraction of accumulated profit. That trades a little speed")
-        log("    for ~20 points of pass probability.")
+        log(f"    The '+ day cap' rows flatten once a day's gain reaches")
+        log(f"    {RK2.derived_day_cap()*100:.2f}%, which is"
+            f" consistency x target / (1 + target) -- the")
+        log("    largest daily return that cannot breach the rule. Derived,")
+        log("    not tuned, and it touches no entry rule.")
 
     # ---- half-sample check on the best set ------------------------------
     # Checks the VERIFIED set, not the best-by-days set. Picking the
