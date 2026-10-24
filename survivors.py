@@ -121,6 +121,8 @@ def build_oirank(R, idx):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--events", action="store_true",
+                    help="also build pattern and sr (the 2 event sleeves)")
     ap.add_argument("--short", type=float, default=0.0,
                     help="blend weight on the 12h short book")
     ap.add_argument("--tf", type=int, default=12)
@@ -138,6 +140,12 @@ def main() -> int:
     oi = build_oirank(R, R.index)
     if oi is not None:
         sl["oirank"] = oi
+    if a.events:
+        import event_daily as ED
+        for s in ("pattern", "sr"):
+            v, n = ED.sleeve_series(s)
+            if v is not None:
+                sl[s] = v
 
     idx = None
     for v in sl.values():

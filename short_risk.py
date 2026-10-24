@@ -136,6 +136,23 @@ def build(coins, tf, sides, cap):
                 open_until.append(lg[2])
         legs = kept
 
+    return (*legs_to_daily(legs, daily_ret), legs)
+
+
+def legs_to_daily(legs, daily_ret):
+    """Positions -> a daily mark-to-market series. ONE copy, deliberately.
+
+    legs: [(coin, entry_ts, exit_ts, side, realised_return, stop_fraction)]
+    daily_ret: {coin: Series of daily close-to-close returns}
+
+    This is the function that carried the sign error (-side * r instead of
+    side * r) through three commits, invisible because each leg's TOTAL is
+    pinned to its backtested return and only the PATH was wrong. Event
+    sleeves need exactly the same conversion, and writing a second copy of
+    the one piece of arithmetic in this project that has already been
+    silently wrong once is how you get it wrong again in a place nobody
+    thinks to check. So: one implementation, two callers.
+    """
     all_days = pd.DatetimeIndex(sorted(set().union(
         *[set(daily_ret[c].index) for c, *_ in legs if c in daily_ret])))
     pnl = pd.Series(0.0, index=all_days)
@@ -187,7 +204,7 @@ def build(coins, tf, sides, cap):
         daily = np.diff(np.concatenate([[0.0], cum]))
         pnl.loc[win.index] += daily
         conc.loc[win.index] += 1
-    return pnl.dropna(), conc, legs
+    return pnl.dropna(), conc
 
 
 def risk_at(pnl, s):
