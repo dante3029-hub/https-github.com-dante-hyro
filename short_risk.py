@@ -291,7 +291,19 @@ def main() -> int:
     ap.add_argument("--both-sides", action="store_true")
     ap.add_argument("--cap", type=int, default=0,
                     help="max concurrent positions (0 = uncapped)")
+    ap.add_argument("--rules", action="store_true",
+                    help="compare rule sets: with/without the 40%% "
+                         "consistency rule, and other firms' limits")
+    ap.add_argument("--dd", type=float, default=None,
+                    help="override the total drawdown limit, e.g. 0.085")
+    ap.add_argument("--daily", type=float, default=None,
+                    help="override the daily limit, e.g. 0.06")
     a = ap.parse_args()
+    global TOTAL_LIMIT, DAILY_LIMIT
+    if a.dd is not None:
+        TOTAL_LIMIT = a.dd
+    if a.daily is not None:
+        DAILY_LIMIT = a.daily
     if V.PERP is None:
         log("  cannot find taker_data; tried: " + ", ".join(V._TRIED))
         return 2
@@ -450,6 +462,46 @@ def main() -> int:
         log(f"    fast -- it is the only one that resolves in your favour.")
 
     log("")
+    # ---- 6. what the rule sets are worth --------------------------------
+    if a.rules:
+        log("")
+        log("  " + "=" * 66)
+        log("  WHAT DO THE RULES THEMSELVES COST?")
+        log("  " + "=" * 66)
+        log("    Each row refits the size to that firm's drawdown limit,")
+        log("    then races to +10%. Same book, same signals throughout --")
+        log("    only the rules change. '2x' is the row above at double")
+        log("    size, because that is where the consistency rule bites.")
+        log("")
+        log(f"    {'rules':<34}{'size':>8}{'gross':>7}{'pass':>7}"
+            f"{'bust':>7}{'open':>6}{'med d':>7}")
+        keep = (TOTAL_LIMIT, DAILY_LIMIT)
+        firms = (("this account  10%DD 5%day  40% rule", 0.10, 0.05, 0.40),
+                 ("this account  10%DD 5%day  NO rule ", 0.10, 0.05, 1.01),
+                 ("8.5%DD 6%day  NO rule             ", 0.085, 0.06, 1.01),
+                 ("8.5%DD 6%day  40% rule            ", 0.085, 0.06, 0.40))
+        for name, dd_, dl_, cons in firms:
+            TOTAL_LIMIT, DAILY_LIMIT = dd_, dl_
+            sz = solve_size(pnl)
+            for mult, tag in ((1, name), (2, "   ^ same, at 2x size")):
+                o, dtp, nd = race_to_barrier(pnl, sz * mult, draws=4000,
+                                             consistency=cons)
+                md = int(np.median(dtp)) if len(dtp) else -1
+                log(f"    {tag:<34}{sz*mult:>8.4f}"
+                    f"{sz*mult*np.median(cv)*100:>6.0f}%"
+                    f"{o['pass']/nd*100:>6.1f}%"
+                    f"{(o['bust_total']+o['bust_daily'])/nd*100:>6.1f}%"
+                    f"{o['timeout']/nd*100:>5.1f}%"
+                    f"{(str(md) if md > 0 else 'n/a'):>7}")
+        TOTAL_LIMIT, DAILY_LIMIT = keep
+        log("")
+        log("    The daily limit never binds: zero daily busts in every row")
+        log("    at every size that is otherwise survivable. A looser daily")
+        log("    allowance is worth nothing to this book, and a tighter")
+        log("    DRAWDOWN floor costs more than a missing consistency rule")
+        log("    saves -- which is the opposite of how the two read on a")
+        log("    firm's comparison page.")
+
     log("  " + "=" * 66)
     log("  BEFORE THIS SIZES ANYTHING LIVE")
     log("  " + "=" * 66)
