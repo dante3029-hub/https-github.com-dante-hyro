@@ -497,8 +497,22 @@ def main() -> int:
         log(f"  only {len(coins)} coins -- aborting")
         return 2
 
-    log(f"  V29 at {a.tf}h bars, {len(coins)} coins, "
-        f"long AND short, BTC MACD quarter-size ON")
+    # This line used to end "BTC MACD quarter-size ON" as a literal string.
+    # The overlay is active only when BTC_1h.csv exists -- btc_macd_dir
+    # returns None without it and every trade is full size. My snapshot has
+    # no BTC file, so the label asserted a filter was running that was not,
+    # on every run, for three commits. The third hardcoded claim in this
+    # file after "the LONG book is noise" and "neither correction
+    # survives": the defect is not any one string, it is writing
+    # conclusions as literals in a report whose job is to carry
+    # measurements.
+    btc_on = os.path.exists(f"{V.PERP}/BTC_1h.csv")
+    log(f"  V29 at {a.tf}h bars, {len(coins)} coins, long AND short")
+    log(f"  BTC MACD quarter-size: "
+        + ("ON" if btc_on else
+           "OFF -- no BTC_1h.csv. This is the chop filter\n"
+           "  added specifically to fix this strategy, so these results"
+           " UNDERSTATE\n  V29. Fetch it: python3 fetch_taker.py --coin BTC"))
     log(f"  market-order round trip bar: {BAR_MKT:.3f}%")
     log("")
     per, frames, btcs = collect(coins, a.tf)

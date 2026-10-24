@@ -161,7 +161,26 @@ def build(coins, tf, sides, cap):
         # at the stop distance (the position cannot lose more than that),
         # and force the final day to the return the trade ACTUALLY made, so
         # the daily series sums to the backtested PnL by construction.
-        cum = np.cumsum(-side * win.values)
+        # SIGN. A position with direction `side` earns `side * r` on a day
+        # the price returns r: a long (+1) earns +r, a short (-1) earns -r.
+        # This read -side * r, so every short leg's daily path was INVERTED
+        # -- the book was credited on the days it actually lost.
+        #
+        # It survived three commits because cum[-1] = realised forces each
+        # leg's TOTAL to the backtested return, so the mean daily return
+        # and the reconciliation against tf_confirm's per-trade number were
+        # both correct. Only the PATH was wrong, which is to say: every
+        # number that depends on the path. Worst day, daily sd, Sharpe,
+        # drawdown, the permitted size, the pass and bust rates, the
+        # days-to-target, and the entire rules comparison.
+        #
+        # What exposed it was a regression beta of +2.47 to the alt complex
+        # for a book that is short it. That is not a surprising result, it
+        # is an impossible one, and an impossible number is the only kind
+        # that cannot be rationalised. The lesson is not "check signs" --
+        # it is that a quantity whose sign is known a priori is worth
+        # computing precisely because it cannot be argued with.
+        cum = np.cumsum(side * win.values)
         if np.isfinite(sl) and sl > 0:
             cum = np.maximum(cum, -sl)
         cum[-1] = realised
