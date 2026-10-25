@@ -98,11 +98,18 @@ def log(m=""):
     print(m, flush=True)
 
 
-def dominance_series(R, index):
-    """(series, label, is_real_btc). Daily change in dominance."""
+def dominance_series(R, index, force_proxy=False):
+    """(series, label, is_real_btc). Daily change in dominance.
+
+    force_proxy exists because the two must be compared on the SAME
+    data. The real BTC series came in much weaker than the
+    majors-minus-smalls proxy -- but that comparison was across two
+    machines with different data cuts, so variable and sample changed
+    together and neither could be blamed. --proxy holds the data fixed.
+    """
     import v29_test as V
     p = f"{V.PERP}/BTC_1h.csv"
-    if os.path.exists(p):
+    if os.path.exists(p) and not force_proxy:
         df = V._load(p)
         if df is not None:
             btc = df["close"].resample("1D").last().dropna().pct_change()
@@ -133,6 +140,8 @@ def quintile_effect(x, sig, lo, hi):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--proxy", action="store_true",
+                    help="force majors-minus-smalls even when BTC exists")
     ap.add_argument("--filter", action="store_true",
                     help="test standing the sleeves aside on those days")
     ap.add_argument("--horizon", type=int, default=0,
@@ -144,7 +153,7 @@ def main() -> int:
     import survivors as SV
 
     idx, PX, R, VOL, DN = book.panel()
-    dom, label, real = dominance_series(R, idx)
+    dom, label, real = dominance_series(R, idx, a.proxy)
     if dom is None:
         log(f"  cannot build a dominance series: {label}")
         return 2
