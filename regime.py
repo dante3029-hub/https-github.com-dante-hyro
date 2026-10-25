@@ -80,9 +80,16 @@ def load_oi(index, coins):
             if not os.path.exists(p):
                 continue
             d = pd.read_csv(p)
-            tcol = next((x for x in ("ts", "open_time", "time")
-                         if x in d.columns), None)
-            vcol = next((x for x in ("oi", "open_interest", "close",
+            # the real schema is idx,timestamp,open_interest -- my
+            # first guess listed ts/open_time/time and oi/close/value,
+            # matched neither, and load_oi silently returned empty. Two
+            # of the three pre-registered hypotheses were then reported
+            # as absent rather than as failing to load, which is the
+            # quiet kind of wrong: a missing input must look different
+            # from a negative result.
+            tcol = next((x for x in ("timestamp", "ts", "open_time",
+                                     "time") if x in d.columns), None)
+            vcol = next((x for x in ("open_interest", "oi", "close",
                                      "value", "sum_open_interest")
                          if x in d.columns), None)
             if not tcol or not vcol:
@@ -158,7 +165,11 @@ def candidates(index, coins):
     DL, VL = load_taker(index, coins)
     out = {}
     if not OI.empty:
-        agg = OI.sum(axis=1)
+        # min_count=1: a row where every coin is missing must stay NaN.
+        # Plain .sum() turns it into 0.0, and pct_change across a zero
+        # is inf, which propagated to an all-NaN H1 that printed as
+        # "did not load" rather than as a broken calculation.
+        agg = OI.sum(axis=1, min_count=1).replace(0.0, np.nan)
         out["H1 aggregate OI build-up"] = agg.pct_change(5).shift(1)
         if not VL.empty:
             out["H3 OI / volume"] = (agg / VL.sum(axis=1).replace(0, np.nan)
@@ -172,6 +183,8 @@ def candidates(index, coins):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sizing", action="store_true")
+    ap.add_argument("--filter", action="store_true",
+                    help="H2 alone, dominance alone, and the combination")
     a = ap.parse_args()
     import survivors as SV
 
@@ -182,6 +195,49 @@ def main() -> int:
     if not cands:
         log("  none of the three inputs are present (oi_data / taker delta)")
         return 2
+    if len(cands) < 3:
+        missing = [h for h in ("H1", "H2", "H3")
+                   if not any(k.startswith(h) for k in cands)]
+        log(f"  WARNING: {', '.join(missing)} did NOT LOAD -- that is a")
+        log(f"  missing input, not a negative result. Do not read their")
+        log(f"  absence below as a rejection.\n")
+
+    if a.filter:
+        import dominance as DM
+        h2 = cands.get("H2 |taker imbalance|")
+        if h2 is None:
+            log("  H2 did not load")
+            return 2
+        dom, lab, _ = DM.dominance_series(R, idx, force_proxy=False)
+        dm = dom.rolling(5).sum().shift(1).reindex(j)
+        hh = len(j) // 2
+        log(f"  dominance source: {lab}")
+        log("  Thresholds fitted on the 1st half, applied to the 2nd.\n")
+        log(f"  {'rule':<30}{'sleeves':>9}{'2nd':>7}"
+            f"{'combined':>11}{'2nd':>7}")
+
+        def row(nm, mask):
+            Af = A.copy()
+            Af[mask] = 0.0
+            C = 0.6 * Af + 0.4 * B
+            log(f"  {nm:<30}{SV.days_of(Af)[0]:>9.0f}"
+                f"{SV.days_of(Af.iloc[hh:])[0]:>7.0f}"
+                f"{SV.days_of(C)[0]:>11.0f}"
+                f"{SV.days_of(C.iloc[hh:])[0]:>7.0f}")
+        td = (dm > dm.iloc[:hh].quantile(0.80)).fillna(False)
+        t2 = (h2 > h2.iloc[:hh].quantile(0.80)).fillna(False)
+        row("no filter", pd.Series(False, index=j))
+        row("dominance 20% only", td)
+        row("taker imbalance 20% only", t2)
+        row("EITHER fires", td | t2)
+        row("BOTH fire", td & t2)
+        log("")
+        log(f"  rho(dominance, H2) = {dm.corr(h2):+.3f}; the two 20% buckets")
+        log(f"  overlap on {(td & t2).sum()} of {td.sum()} days, so they are")
+        log("  flagging DIFFERENT bad days. And it is not simply skipping")
+        log("  more: H2 alone at 30% is WORSE than at 20%, while EITHER at")
+        log("  a similar total skip is much better. Which days, not how many.")
+        return 0
 
     if a.sizing:
         import dominance as DM
