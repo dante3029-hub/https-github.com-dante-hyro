@@ -170,7 +170,8 @@ def candidates(index, coins):
         # is inf, which propagated to an all-NaN H1 that printed as
         # "did not load" rather than as a broken calculation.
         agg = OI.sum(axis=1, min_count=1).replace(0.0, np.nan)
-        out["H1 aggregate OI build-up"] = agg.pct_change(5).shift(1)
+        out["H1 aggregate OI build-up"] = agg.pct_change(
+            5, fill_method=None).shift(1)
         if not VL.empty:
             out["H3 OI / volume"] = (agg / VL.sum(axis=1).replace(0, np.nan)
                                      ).rolling(5).mean().shift(1)
@@ -184,7 +185,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sizing", action="store_true")
     ap.add_argument("--filter", action="store_true",
-                    help="H2 alone, dominance alone, and the combination")
+                    help="H2 alone, rotation alone, and the combination")
+    ap.add_argument("--real-btc", action="store_true",
+                    help="use real BTC dominance instead of rotation")
     a = ap.parse_args()
     import survivors as SV
 
@@ -208,10 +211,14 @@ def main() -> int:
         if h2 is None:
             log("  H2 did not load")
             return 2
-        dom, lab, _ = DM.dominance_series(R, idx, force_proxy=False)
+        # DEFAULTS TO ROTATION, not BTC dominance. On identical data
+        # rotation gives sleeves 199->117 at a 20% skip against 199->184
+        # for real BTC. The first combination test used the weaker one.
+        dom, lab, _ = DM.dominance_series(R, idx,
+                                          force_proxy=not a.real_btc)
         dm = dom.rolling(5).sum().shift(1).reindex(j)
         hh = len(j) // 2
-        log(f"  dominance source: {lab}")
+        log(f"  rotation source: {lab}")
         log("  Thresholds fitted on the 1st half, applied to the 2nd.\n")
         log(f"  {'rule':<30}{'sleeves':>9}{'2nd':>7}"
             f"{'combined':>11}{'2nd':>7}")
@@ -227,12 +234,12 @@ def main() -> int:
         td = (dm > dm.iloc[:hh].quantile(0.80)).fillna(False)
         t2 = (h2 > h2.iloc[:hh].quantile(0.80)).fillna(False)
         row("no filter", pd.Series(False, index=j))
-        row("dominance 20% only", td)
+        row("rotation 20% only", td)
         row("taker imbalance 20% only", t2)
         row("EITHER fires", td | t2)
         row("BOTH fire", td & t2)
         log("")
-        log(f"  rho(dominance, H2) = {dm.corr(h2):+.3f}; the two 20% buckets")
+        log(f"  rho(rotation, H2) = {dm.corr(h2):+.3f}; the two 20% buckets")
         log(f"  overlap on {(td & t2).sum()} of {td.sum()} days, so they are")
         log("  flagging DIFFERENT bad days. And it is not simply skipping")
         log("  more: H2 alone at 30% is WORSE than at 20%, while EITHER at")

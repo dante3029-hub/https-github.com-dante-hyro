@@ -120,8 +120,19 @@ def dominance_series(R, index, force_proxy=False):
     sml = [c for c in R.columns if c not in maj]
     if len(maj) < 4 or len(sml) < 4:
         return None, "insufficient coins to split", False
-    return (R[maj].mean(axis=1) - R[sml].mean(axis=1)),\
-           f"majors({len(maj)}) - smalls({len(sml)}) PROXY, no BTC file", False
+    why = ("forced with --proxy" if os.path.exists(p)
+           else "no BTC file, this is the fallback")
+    # The label used to read "PROXY, no BTC file" unconditionally, so a
+    # forced run on a box that HAS BTC reported a missing file. Worse,
+    # calling it a proxy is now wrong: measured on identical data it
+    # BEATS real BTC dominance (sleeves 199->117 against 199->184 at a
+    # 20% skip). It is not an approximation of dominance, it is a
+    # different and better variable -- rotation INSIDE the traded
+    # cross-section, which is what the sleeves actually harvest. BTC is
+    # not even in the universe.
+    lab = (f"intra-universe rotation: majors({len(maj)}) -"
+           f" smalls({len(sml)}) [{why}]")
+    return (R[maj].mean(axis=1) - R[sml].mean(axis=1)), lab, False
 
 
 def quintile_effect(x, sig, lo, hi):
