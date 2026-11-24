@@ -1,0 +1,196 @@
+{
+  "fund": "Night Desk",
+  "updated": "2026-11-22",
+  "bots": [
+    {
+      "id": "crypto",
+      "name": "Crypto bot",
+      "asset": "Crypto perps",
+      "venue": "Hyperliquid; Hyro Instant (Bybit API) \u2014 own-strategy bots confirmed by Hyro support",
+      "limits": {
+        "start": "",
+        "floorPct": 5,
+        "dailyPct": 3,
+        "maxLev": 3
+      },
+      "accounts": [
+        {
+          "label": "Hyro Instant",
+          "venue": "bybit",
+          "address": "",
+          "note": "Hyro support confirmed (Discord ticket-11528): own bots/scripts allowed on Hyro Instant via Bybit or BloFin API; third-party bots, copy trading and signals are not. Trade-only key, withdrawals off, IP-locked, kept in .env. Rules: 5% max loss, 3% daily, 2% per trade, margin \u226425% and notional \u22642\u00d7 initial, low caps \u22645% per position (40% of profit counts), payout \u22645% of initial."
+        }
+      ],
+      "strategies": [
+        {
+          "id": "sr-break",
+          "name": "S/R break",
+          "status": "paper",
+          "summary": "Goes long when price breaks a volume-defined resistance level on 6-hour bars while open interest is rising.",
+          "rules": [
+            "6-hour bars, 24 liquid coins",
+            "Enter long when the whole candle clears resistance and OI is expanding",
+            "Stop 3 ATR below entry, exit after 15 bars, no take-profit",
+            "Equal risk with OI rank"
+          ],
+          "evidence": {
+            "fit": 1.56,
+            "oos": 1.58,
+            "t": 1.97,
+            "months": "9 of 11 months up",
+            "note": "Excess Sharpe over random-timing trades. Out-of-sample = 2023, never used to fit. Measured after fixing the stop-bar lookahead (as-built 2.09, fixed 1.42 absolute)."
+          },
+          "gate": "Passed: kept its edge on 2023 data it was never fitted to.",
+          "longOnly": true
+        },
+        {
+          "id": "oi-rank",
+          "name": "OI rank",
+          "status": "paper",
+          "summary": "Each rebalance, goes long the 5 coins with the biggest rise in open interest and short the 5 with the biggest fall.",
+          "rules": [
+            "25 coins with open-interest history",
+            "OI change ranked over 3, 5, 7, 10 and 14 days, then averaged",
+            "Long top 5, short bottom 5, dollar-neutral",
+            "Rebalance every 3 days"
+          ],
+          "evidence": {
+            "fit": 1.63,
+            "oos": 1.46,
+            "t": 1.25,
+            "months": "7 of 12 months up",
+            "note": "Excess Sharpe over 40 random books. Lost about 10% of its edge out of sample, the least of any sleeve tested."
+          },
+          "gate": "Passed on direction and stability; 12 months cannot reach t = 2 even for a real edge, so it stays at paper until more history confirms it."
+        },
+        {
+          "id": "bnf-dip",
+          "name": "Deep dip (BNF)",
+          "status": "testing",
+          "summary": "Buys a coin after its daily close falls 20% or more below its 25-day average, sells the rebound.",
+          "rules": [
+            "Daily bars, top-30 coins",
+            "Long when the close is \u226520% below the 25-day SMA",
+            "Exit on a close back at the SMA, or after 10 days",
+            "No stop in the test (worst trade \u221258%), so size must be small"
+          ],
+          "evidence": {
+            "fit": null,
+            "oos": null,
+            "t": 2.04,
+            "months": "25 of 34 months up",
+            "note": "+3.76% per trade vs +0.57% for random entries on the same coin and hold (400 trades). Held on the 33 other coins: +2.82%, t 2.78. Edge is shrinking each year: 7.1% (2023), 6.1%, 2.8%, 1.2% (2026)."
+          },
+          "gate": "Survivorship check on older data that includes coins that died (2019\u20132022), then paper trading.",
+          "blocker": "Data only covers coins still listed today, which flatters dip-buying."
+        },
+        {
+          "id": "candle-book",
+          "name": "Candle book (7 sleeves)",
+          "status": "testing",
+          "summary": "Seven candlestick-pattern sleeves. Built by the same process that produced a sleeve that turned out to be 90% lookahead, so it is being re-audited before any money goes in.",
+          "rules": [
+            "Hammer 6h and 12h, Three White Soldiers 6h, Bullish 3-Line Strike 12h, Bearish Engulfing 6h, Hanging Man 6h, Tweezer Top 12h"
+          ],
+          "gate": "Stop-bar exit audit, then the 2023 holdout against random entry.",
+          "blocker": "Audit not yet run."
+        },
+        {
+          "id": "aggr-open",
+          "name": "Aggressive opening",
+          "status": "research",
+          "summary": "Long coins where open interest and aggressive buying both rose over the last 3 days, hedged with a short of the whole basket.",
+          "rules": [
+            "Daily: long every coin with 3-day OI change > 0 and 3-day net taker flow > 0",
+            "Equal-dollar short of the coin basket",
+            "Hold 3 days, no stop"
+          ],
+          "gate": "One run on 2019\u20132022 data only. Pass = t above 2, positive in 3 of 4 years, correlation under 0.6 with OI rank.",
+          "blocker": "Needs OI history for 2019\u20132022 (CoinGlass) and Binance taker data pulled on the server."
+        }
+      ]
+    },
+    {
+      "id": "macro",
+      "name": "Stocks & macro bot",
+      "asset": "Stocks, indices, metals, energy",
+      "venue": "Hyperliquid HIP-3, real money",
+      "limits": {
+        "start": "",
+        "floorPct": 20,
+        "dailyPct": 3,
+        "maxLev": 2
+      },
+      "accounts": [],
+      "strategies": [
+        {
+          "id": "xa-trend",
+          "name": "Cross-asset trend",
+          "status": "research",
+          "summary": "Follows medium-term trends across gold, silver, oil, the S&P, the Nasdaq and bonds, sized so every market carries the same risk.",
+          "rules": [
+            "Rules to be written down in full before the first test",
+            "Daily bars, each market sized to equal volatility",
+            "Long or short with the trend, no discretionary overrides"
+          ],
+          "gate": "Tested once on 20+ years of daily data, must beat random entry out of sample.",
+          "blocker": "Needs daily price history, pulled on the server."
+        }
+      ]
+    }
+  ],
+  "retired": [
+    {
+      "name": "FVG 12h sleeve",
+      "why": "Sharpe 2.99 fell to 0.26 once the stop-bar lookahead was fixed."
+    },
+    {
+      "name": "FVG first revisit (4h)",
+      "why": "Fill artifact: turns negative once price must trade 0.10% through the gap edge."
+    },
+    {
+      "name": "Pattern 6h (MarkitTick)",
+      "why": "Excess over random of \u22120.14 on 2023 data."
+    },
+    {
+      "name": "Delta cross-section",
+      "why": "Lost 76\u201384% of its edge out of sample."
+    },
+    {
+      "name": "Relative volume",
+      "why": "Lost 78% of its edge out of sample."
+    },
+    {
+      "name": "MACD cross \u2192 50 EMA retest short",
+      "why": "Worse than random at 4h across 14,247 trades."
+    },
+    {
+      "name": "Price Action Playbook",
+      "why": "Flat: \u22120.019R per trade pooled across 706 trades."
+    },
+    {
+      "name": "Order-flow patterns",
+      "why": "Zero edge over random at five timeframes, 5m to 4h."
+    },
+    {
+      "name": "Who's opening, who's closing (v1)",
+      "why": "No edge over random, and 0.72 correlated with OI rank."
+    },
+    {
+      "name": "VWAP acceptance (session value area)",
+      "why": "Identical to random entry across 88,741 trades: excess \u22120.014R at 15m, +0.002R at 1h."
+    },
+    {
+      "name": "Calendar levels (prev day/week/month high, yearly open)",
+      "why": "With honest stop exits, excess over random is \u22120.14R to +0.15R; no monthly t above 1.4. The old 1.2\u20131.7 Sharpe was the exit lookahead."
+    },
+    {
+      "name": "Day-of-week and hour-of-day effects",
+      "why": "No weekday or UTC hour clears the multiple-testing line; the best (22:00 UTC, 0.054%/hr) is a third of trading costs and fades."
+    },
+    {
+      "name": "Level revisit + break of structure (Monday / last-week high-low)",
+      "why": "45,877 trades, 4 pre-registered cells: \u22120.02 to \u22120.05R per trade. About +0.03R better than random timing, too thin to beat fees. Multi-timeframe version (4h structure, 1h/15m entry): 1h entry broke even (+0.015R, t 0.45); 15m entry \u22120.10R after fees."
+    }
+  ]
+}

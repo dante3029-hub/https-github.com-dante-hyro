@@ -1,0 +1,1296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Night Desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+/*
+  Night Desk -- a read-only monitor for a small fund of trading bots.
+  Three levels, one click apart: the fund (every bot), a bot (its account,
+  its risk checks, its strategies), and a strategy (its rules, the evidence
+  that let it in, and what it is trading).
+*/
+:root {
+  --bg: #f3f6f6; --panel: #ffffff; --panel-2: #eef2f2; --line: #d9e2e3;
+  --fg: #132126; --muted: #5b6d72; --accent: #1d7c73;
+  --up: #17875a; --down: #c2463e; --watch: #a7760f;
+  --up-soft: rgba(23,135,90,.12); --down-soft: rgba(194,70,62,.12);
+  --watch-soft: rgba(167,118,15,.14); --accent-soft: rgba(29,124,115,.12);
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --r: 10px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0c1113; --panel: #131a1d; --panel-2: #182125; --line: #233036;
+    --fg: #dbe4e6; --muted: #7f9196; --accent: #52b3a8;
+    --up: #3fb47f; --down: #e3675e; --watch: #d9a740;
+    --up-soft: rgba(63,180,127,.14); --down-soft: rgba(227,103,94,.15);
+    --watch-soft: rgba(217,167,64,.15); --accent-soft: rgba(82,179,168,.14);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0c1113; --panel: #131a1d; --panel-2: #182125; --line: #233036;
+  --fg: #dbe4e6; --muted: #7f9196; --accent: #52b3a8;
+  --up: #3fb47f; --down: #e3675e; --watch: #d9a740;
+  --up-soft: rgba(63,180,127,.14); --down-soft: rgba(227,103,94,.15);
+  --watch-soft: rgba(217,167,64,.15); --accent-soft: rgba(82,179,168,.14);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--fg); font: 14px/1.45 var(--sans);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 32px;
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+.num, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+a { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* status bar */
+.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 12px 0; background: var(--bg); border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: baseline; gap: 10px; margin-right: auto; min-width: 0; }
+.brand h1 { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
+.crumbs { display: flex; gap: 6px; align-items: baseline; font-size: 13px; color: var(--muted); min-width: 0; flex-wrap: wrap; }
+.crumbs a { text-decoration: none; color: var(--muted); }
+.crumbs a:hover { color: var(--accent); }
+.crumbs b { color: var(--fg); font-weight: 600; }
+.feed { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.dot.ok { background: var(--up); box-shadow: 0 0 0 3px var(--up-soft); }
+.dot.watch { background: var(--watch); box-shadow: 0 0 0 3px var(--watch-soft); }
+.dot.alert { background: var(--down); box-shadow: 0 0 0 3px var(--down-soft); }
+.btn { padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); font-size: 13px; font-weight: 500; white-space: nowrap; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.btn.small { padding: 4px 9px; font-size: 12px; }
+.btn:hover { border-color: var(--accent); }
+.banner { margin-top: 12px; padding: 9px 12px; border-radius: 8px; font-size: 13px; border: 1px solid var(--line); background: var(--panel-2); }
+.banner.demo { border-color: var(--watch); background: var(--watch-soft); }
+.banner.error { border-color: var(--down); background: var(--down-soft); }
+
+/* figures */
+.strip { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 1px; margin-top: 14px; background: var(--line); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.stat { background: var(--panel); padding: 12px 14px; min-width: 0; }
+.stat .k { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+.stat .v { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 20px; font-weight: 600; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stat .s { font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pos { color: var(--up); } .neg { color: var(--down); }
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); min-width: 0; }
+.ph { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.ph h2 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+.ph .grow { flex: 1; }
+.ph select { padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); font-family: var(--mono); font-size: 12px; }
+.meta { font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.seg button { border: 0; background: transparent; padding: 3px 9px; font-size: 12px; color: var(--muted); }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.chart { position: relative; height: 340px; }
+.chart.small { height: 200px; }
+.chart canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 13px; text-align: center; padding: 20px; }
+.section { margin-top: 14px; }
+.cols { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 14px; margin-top: 14px; align-items: start; }
+.cols2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; margin-top: 14px; align-items: start; }
+.stack { display: grid; gap: 14px; min-width: 0; }
+
+/* bot + strategy cards */
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; margin-top: 14px; }
+.card { text-align: left; display: grid; gap: 10px; padding: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); cursor: pointer; min-width: 0; width: 100%; }
+.card:hover { border-color: var(--accent); }
+.card .top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.card .name { font-weight: 700; font-size: 16px; }
+.card .venue { color: var(--muted); font-size: 12px; }
+.card .row { display: flex; gap: 18px; flex-wrap: wrap; }
+.card .fig .k { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.card .fig .v { font-family: var(--mono); font-size: 17px; font-weight: 600; }
+.card .sum { color: var(--muted); font-size: 13px; }
+.card .ev { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.tags { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.chip { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .06em; padding: 2px 6px; border-radius: 4px; vertical-align: 1px; text-transform: uppercase; white-space: nowrap; }
+.chip.ok, .chip.live { background: var(--up-soft); color: var(--up); }
+.chip.watch, .chip.testing { background: var(--watch-soft); color: var(--watch); }
+.chip.alert, .chip.retired { background: var(--down-soft); color: var(--down); }
+.chip.paper { background: var(--accent-soft); color: var(--accent); }
+.chip.idle, .chip.research { background: var(--panel-2); color: var(--muted); }
+
+/* checks */
+.checks { list-style: none; margin: 0; padding: 0; }
+.check { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.check:last-child { border-bottom: 0; }
+.check .t { font-weight: 600; font-size: 13px; }
+.check .t .chip { margin-left: 6px; }
+.check .val { font-family: var(--mono); font-size: 13px; text-align: right; white-space: nowrap; }
+.check .d { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+.check.alert { box-shadow: inset 3px 0 0 var(--down); }
+.check.watch { box-shadow: inset 3px 0 0 var(--watch); }
+
+/* forms */
+.form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line); }
+.form label { display: grid; gap: 3px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; min-width: 0; }
+.form input, .form select { padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel-2); font-family: var(--mono); font-size: 13px; width: 100%; min-width: 0; }
+.form .wide { grid-column: 1 / -1; }
+.form .presets { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; }
+.acctrow { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+.acctrow input { padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel-2); font-family: var(--mono); font-size: 12px; width: 100%; min-width: 0; }
+.acctrow .lbl { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
+.acctrow .note { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+
+/* tables */
+.tw { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+th, td { padding: 7px 12px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line); }
+th { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); background: var(--panel-2); }
+th:first-child, td:first-child { text-align: left; }
+td { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+td.txt { font-family: var(--sans); white-space: normal; text-align: left; min-width: 240px; }
+tbody tr:last-child td { border-bottom: 0; }
+tr.click { cursor: pointer; }
+tr.click:hover td { background: var(--accent-soft); }
+.side { font-weight: 600; }
+
+/* strategy page */
+.sp { display: grid; gap: 14px; padding: 16px; }
+.sp h3 { margin: 0; font-size: 24px; letter-spacing: -.01em; text-wrap: balance; }
+.sp p { margin: 0; max-width: 70ch; }
+.sp ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; max-width: 70ch; }
+.kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.kv div { background: var(--panel-2); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+.kv .k { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.kv .v { font-family: var(--mono); font-size: 18px; font-weight: 600; }
+.lbl2 { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 600; }
+.note { color: var(--muted); font-size: 13px; max-width: 75ch; }
+.foot { margin-top: 18px; color: var(--muted); font-size: 12px; max-width: 80ch; }
+.foot code { font-family: var(--mono); }
+
+@media (max-width: 1100px) { .cols { grid-template-columns: minmax(0, 1fr); } .strip { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 760px) {
+  .cols2 { grid-template-columns: minmax(0, 1fr); }
+  .strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .chart { height: 280px; }
+  .cards { grid-template-columns: minmax(0, 1fr); }
+  .acctrow { grid-template-columns: minmax(0, 1fr) auto; }
+  .acctrow input { grid-column: 1 / -1; grid-row: 2; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+
+<header class="bar">
+  <div class="brand"><h1 id="fundName">Night Desk</h1><nav class="crumbs" id="crumbs" aria-label="Location"></nav></div>
+  <span class="feed"><span class="dot" id="feedDot"></span><span id="feedText">starting</span></span>
+  <button class="btn" type="button" id="modeBtn">Use my accounts</button>
+  <button class="btn" type="button" id="themeBtn" title="Switch light / dark">Theme</button>
+</header>
+
+<div class="banner demo" id="demoBanner">Showing <b>example data</b> for every bot and account. Strategy statuses and evidence are real; the balances, positions and fills are not. Add your Hyperliquid addresses on a bot's page, then press <b>Use my accounts</b>.</div>
+<div class="banner error" id="errBanner" hidden></div>
+
+<!-- ======================= FUND ======================= -->
+<section id="vFund" hidden>
+  <div class="strip" id="fundStrip"></div>
+  <div class="cards" id="botCards"></div>
+  <section class="panel section">
+    <div class="ph"><h2>Fund equity</h2>
+      <div class="seg" data-range-for="fund" role="group" aria-label="Range"></div>
+      <span class="grow"></span><span class="meta" id="fundEqInfo"></span></div>
+    <div class="chart small"><canvas id="fundEqCv"></canvas><div class="empty" id="fundEqEmpty" hidden></div></div>
+  </section>
+  <section class="panel section">
+    <div class="ph"><h2>Strategy pipeline</h2><span class="grow"></span><span class="meta">research → testing → paper → live</span></div>
+    <div class="tw"><table>
+      <thead><tr><th>Strategy</th><th>Bot</th><th>Status</th><th>Out-of-sample</th><th style="text-align:left">Next step</th></tr></thead>
+      <tbody id="pipeBody"></tbody>
+    </table></div>
+  </section>
+  <section class="panel section">
+    <div class="ph"><h2>Retired</h2><span class="grow"></span><span class="meta">tested and rejected · kept so nothing quietly comes back</span></div>
+    <div class="tw"><table>
+      <thead><tr><th>Strategy</th><th style="text-align:left">Why it was retired</th></tr></thead>
+      <tbody id="retiredBody"></tbody>
+    </table></div>
+  </section>
+</section>
+
+<!-- ======================= BOT ======================= -->
+<section id="vBot" hidden>
+  <div class="strip" id="botStrip"></div>
+  <div class="cards" id="stratCards"></div>
+  <div class="cols">
+    <div class="stack">
+      <section class="panel">
+        <div class="ph">
+          <h2>Price</h2>
+          <select id="coinSel" aria-label="Coin"></select>
+          <div class="seg" id="ivSeg" role="group" aria-label="Interval">
+            <button type="button" data-iv="5m">5m</button><button type="button" data-iv="15m">15m</button><button type="button" data-iv="1h">1h</button><button type="button" data-iv="4h">4h</button>
+          </div>
+          <span class="grow"></span><span class="meta" id="ohlc"></span>
+        </div>
+        <div class="chart" id="priceWrap"><canvas id="priceCv"></canvas><div class="empty" id="priceEmpty" hidden></div></div>
+      </section>
+      <section class="panel">
+        <div class="ph"><h2>Bot equity</h2><div class="seg" data-range-for="bot" role="group" aria-label="Range"></div><span class="grow"></span><span class="meta" id="botEqInfo"></span></div>
+        <div class="chart small"><canvas id="botEqCv"></canvas><div class="empty" id="botEqEmpty" hidden></div></div>
+      </section>
+    </div>
+    <aside class="stack">
+      <section class="panel" aria-label="Risk checks">
+        <div class="ph"><h2>Risk checks</h2><span class="grow"></span><span class="meta" id="checkSum"></span></div>
+        <ul class="checks" id="checks"></ul>
+        <form class="form" id="limits" autocomplete="off">
+          <label for="limStart">Starting balance $<input id="limStart" inputmode="decimal" placeholder="e.g. 1500"></label>
+          <label for="limFloor">Static floor %<input id="limFloor" inputmode="decimal"></label>
+          <label for="limDaily">Daily loss limit %<input id="limDaily" inputmode="decimal"></label>
+          <label for="limLev">Max gross leverage ×<input id="limLev" inputmode="decimal"></label>
+          <div class="presets">
+            <button type="button" class="btn small" data-preset="cashed">Cashed 3% / 6%</button>
+            <button type="button" class="btn small" data-preset="hyro">Hyro 5% / 10%</button>
+            <button type="button" class="btn small" data-preset="hyroi">Hyro Instant 3% / 5%</button>
+            <button type="button" class="btn small" data-preset="own">Own money 3% / 20%</button>
+          </div>
+        </form>
+      </section>
+      <section class="panel" aria-label="Accounts">
+        <div class="ph"><h2>Accounts</h2><span class="grow"></span><button type="button" class="btn small" id="addAcct">Add Hyperliquid account</button></div>
+        <div id="acctList"></div>
+        <p class="note" style="padding:10px 14px;margin:0">Public 0x addresses only, never a private key. Give each strategy its own Hyperliquid sub-account and its P&amp;L can be read straight from Hyperliquid.</p>
+      </section>
+    </aside>
+  </div>
+  <div class="cols2">
+    <section class="panel">
+      <div class="ph"><h2>Positions</h2><span class="grow"></span><span class="meta" id="posInfo"></span></div>
+      <div class="tw"><table>
+        <thead><tr><th>Coin</th><th>Strategy</th><th>Side</th><th>Size $</th><th>Entry</th><th>Mark</th><th>uPnL</th><th>Lev</th><th>To liq</th><th>Funding/day</th></tr></thead>
+        <tbody id="posBody"></tbody>
+      </table></div>
+    </section>
+    <section class="panel">
+      <div class="ph"><h2>Fills</h2><span class="grow"></span><span class="meta" id="fillInfo"></span></div>
+      <div class="tw"><table>
+        <thead><tr><th>Time</th><th>Coin</th><th>Strategy</th><th>Action</th><th>Price</th><th>Size $</th><th>Closed P&amp;L</th><th>Fee</th></tr></thead>
+        <tbody id="fillBody"></tbody>
+      </table></div>
+    </section>
+  </div>
+  <section class="panel section">
+    <div class="ph"><h2>Market positioning</h2><span class="grow"></span><span class="meta">top 20 by open interest · tap a row to chart it</span></div>
+    <div class="tw"><table>
+      <thead><tr><th>Coin</th><th>Mark</th><th>24h</th><th>Funding (ann.)</th><th>Open interest $</th><th>24h volume $</th><th>OI / volume</th><th>Premium</th></tr></thead>
+      <tbody id="mktBody"></tbody>
+    </table></div>
+  </section>
+</section>
+
+<!-- ======================= STRATEGY ======================= -->
+<section id="vStrat" hidden>
+  <section class="panel section">
+    <div class="sp" id="stratHead"></div>
+  </section>
+  <div class="strip" id="stratStrip" hidden></div>
+  <section class="panel section" id="stratEqPanel" hidden>
+    <div class="ph"><h2>Strategy equity</h2><div class="seg" data-range-for="strat" role="group" aria-label="Range"></div><span class="grow"></span><span class="meta" id="stratEqInfo"></span></div>
+    <div class="chart small"><canvas id="stratEqCv"></canvas><div class="empty" id="stratEqEmpty" hidden></div></div>
+  </section>
+  <div class="cols2" id="stratTables" hidden>
+    <section class="panel">
+      <div class="ph"><h2>Positions</h2></div>
+      <div class="tw"><table><thead><tr><th>Coin</th><th>Side</th><th>Size $</th><th>Entry</th><th>Mark</th><th>uPnL</th><th>To liq</th></tr></thead><tbody id="sPosBody"></tbody></table></div>
+    </section>
+    <section class="panel">
+      <div class="ph"><h2>Fills</h2></div>
+      <div class="tw"><table><thead><tr><th>Time</th><th>Coin</th><th>Action</th><th>Price</th><th>Size $</th><th>Closed P&amp;L</th></tr></thead><tbody id="sFillBody"></tbody></table></div>
+    </section>
+  </div>
+</section>
+
+<p class="foot">Read-only. Data comes from Hyperliquid's public info API, directly or through <code>night_desk_server.py</code>; nothing here can place or cancel an order. Accounts refresh every 15 s, fills and equity every 30 s, market and chart every 60 s, paused while the tab is hidden. "24h" figures are Hyperliquid's rolling 24-hour window. Funding is charged hourly; annualised figures are the hourly rate × 8,760. Strategy evidence is excess Sharpe over random entry, measured on data the strategy was never fitted to.</p>
+
+<script type="application/json" id="fundDefault">{
+ "fund": "Night Desk",
+ "updated": "2026-11-22",
+ "bots": [
+  {
+   "id": "crypto",
+   "name": "Crypto bot",
+   "asset": "Crypto perps",
+   "venue": "Hyperliquid; Hyro Instant (Bybit API) — own-strategy bots confirmed by Hyro support",
+   "limits": {
+    "start": "",
+    "floorPct": 5,
+    "dailyPct": 3,
+    "maxLev": 3
+   },
+   "accounts": [
+    {
+     "label": "Hyro Instant",
+     "venue": "bybit",
+     "address": "",
+     "note": "Hyro support confirmed (Discord ticket-11528): own bots/scripts allowed on Hyro Instant via Bybit or BloFin API; third-party bots, copy trading and signals are not. Trade-only key, withdrawals off, IP-locked, kept in .env. Rules: 5% max loss, 3% daily, 2% per trade, margin ≤25% and notional ≤2× initial, low caps ≤5% per position (40% of profit counts), payout ≤5% of initial."
+    }
+   ],
+   "strategies": [
+    {
+     "id": "sr-break",
+     "name": "S/R break",
+     "status": "paper",
+     "summary": "Goes long when price breaks a volume-defined resistance level on 6-hour bars while open interest is rising.",
+     "rules": [
+      "6-hour bars, 24 liquid coins",
+      "Enter long when the whole candle clears resistance and OI is expanding",
+      "Stop 3 ATR below entry, exit after 15 bars, no take-profit",
+      "Equal risk with OI rank"
+     ],
+     "evidence": {
+      "fit": 1.56,
+      "oos": 1.58,
+      "t": 1.97,
+      "months": "9 of 11 months up",
+      "note": "Excess Sharpe over random-timing trades. Out-of-sample = 2023, never used to fit. Measured after fixing the stop-bar lookahead (as-built 2.09, fixed 1.42 absolute)."
+     },
+     "gate": "Passed: kept its edge on 2023 data it was never fitted to.",
+     "longOnly": true
+    },
+    {
+     "id": "oi-rank",
+     "name": "OI rank",
+     "status": "paper",
+     "summary": "Each rebalance, goes long the 5 coins with the biggest rise in open interest and short the 5 with the biggest fall.",
+     "rules": [
+      "25 coins with open-interest history",
+      "OI change ranked over 3, 5, 7, 10 and 14 days, then averaged",
+      "Long top 5, short bottom 5, dollar-neutral",
+      "Rebalance every 3 days"
+     ],
+     "evidence": {
+      "fit": 1.63,
+      "oos": 1.46,
+      "t": 1.25,
+      "months": "7 of 12 months up",
+      "note": "Excess Sharpe over 40 random books. Lost about 10% of its edge out of sample, the least of any sleeve tested."
+     },
+     "gate": "Passed on direction and stability; 12 months cannot reach t = 2 even for a real edge, so it stays at paper until more history confirms it."
+    },
+    {
+     "id": "bnf-dip",
+     "name": "Deep dip (BNF)",
+     "status": "testing",
+     "summary": "Buys a coin after its daily close falls 20% or more below its 25-day average, sells the rebound.",
+     "rules": [
+      "Daily bars, top-30 coins",
+      "Long when the close is ≥20% below the 25-day SMA",
+      "Exit on a close back at the SMA, or after 10 days",
+      "No stop in the test (worst trade −58%), so size must be small"
+     ],
+     "evidence": {
+      "fit": null,
+      "oos": null,
+      "t": 2.04,
+      "months": "25 of 34 months up",
+      "note": "+3.76% per trade vs +0.57% for random entries on the same coin and hold (400 trades). Held on the 33 other coins: +2.82%, t 2.78. Edge is shrinking each year: 7.1% (2023), 6.1%, 2.8%, 1.2% (2026)."
+     },
+     "gate": "Survivorship check on older data that includes coins that died (2019–2022), then paper trading.",
+     "blocker": "Data only covers coins still listed today, which flatters dip-buying."
+    },
+    {
+     "id": "candle-book",
+     "name": "Candle book (7 sleeves)",
+     "status": "testing",
+     "summary": "Seven candlestick-pattern sleeves. Built by the same process that produced a sleeve that turned out to be 90% lookahead, so it is being re-audited before any money goes in.",
+     "rules": [
+      "Hammer 6h and 12h, Three White Soldiers 6h, Bullish 3-Line Strike 12h, Bearish Engulfing 6h, Hanging Man 6h, Tweezer Top 12h"
+     ],
+     "gate": "Stop-bar exit audit, then the 2023 holdout against random entry.",
+     "blocker": "Audit not yet run."
+    },
+    {
+     "id": "aggr-open",
+     "name": "Aggressive opening",
+     "status": "research",
+     "summary": "Long coins where open interest and aggressive buying both rose over the last 3 days, hedged with a short of the whole basket.",
+     "rules": [
+      "Daily: long every coin with 3-day OI change > 0 and 3-day net taker flow > 0",
+      "Equal-dollar short of the coin basket",
+      "Hold 3 days, no stop"
+     ],
+     "gate": "One run on 2019–2022 data only. Pass = t above 2, positive in 3 of 4 years, correlation under 0.6 with OI rank.",
+     "blocker": "Needs OI history for 2019–2022 (CoinGlass) and Binance taker data pulled on the server."
+    }
+   ]
+  },
+  {
+   "id": "macro",
+   "name": "Stocks & macro bot",
+   "asset": "Stocks, indices, metals, energy",
+   "venue": "Hyperliquid HIP-3, real money",
+   "limits": {
+    "start": "",
+    "floorPct": 20,
+    "dailyPct": 3,
+    "maxLev": 2
+   },
+   "accounts": [],
+   "strategies": [
+    {
+     "id": "xa-trend",
+     "name": "Cross-asset trend",
+     "status": "research",
+     "summary": "Follows medium-term trends across gold, silver, oil, the S&P, the Nasdaq and bonds, sized so every market carries the same risk.",
+     "rules": [
+      "Rules to be written down in full before the first test",
+      "Daily bars, each market sized to equal volatility",
+      "Long or short with the trend, no discretionary overrides"
+     ],
+     "gate": "Tested once on 20+ years of daily data, must beat random entry out of sample.",
+     "blocker": "Needs daily price history, pulled on the server."
+    }
+   ]
+  }
+ ],
+ "retired": [
+  {
+   "name": "FVG 12h sleeve",
+   "why": "Sharpe 2.99 fell to 0.26 once the stop-bar lookahead was fixed."
+  },
+  {
+   "name": "FVG first revisit (4h)",
+   "why": "Fill artifact: turns negative once price must trade 0.10% through the gap edge."
+  },
+  {
+   "name": "Pattern 6h (MarkitTick)",
+   "why": "Excess over random of −0.14 on 2023 data."
+  },
+  {
+   "name": "Delta cross-section",
+   "why": "Lost 76–84% of its edge out of sample."
+  },
+  {
+   "name": "Relative volume",
+   "why": "Lost 78% of its edge out of sample."
+  },
+  {
+   "name": "MACD cross → 50 EMA retest short",
+   "why": "Worse than random at 4h across 14,247 trades."
+  },
+  {
+   "name": "Price Action Playbook",
+   "why": "Flat: −0.019R per trade pooled across 706 trades."
+  },
+  {
+   "name": "Order-flow patterns",
+   "why": "Zero edge over random at five timeframes, 5m to 4h."
+  },
+  {
+   "name": "Who's opening, who's closing (v1)",
+   "why": "No edge over random, and 0.72 correlated with OI rank."
+  },
+  {
+   "name": "VWAP acceptance (session value area)",
+   "why": "Identical to random entry across 88,741 trades: excess −0.014R at 15m, +0.002R at 1h."
+  },
+  {
+   "name": "Calendar levels (prev day/week/month high, yearly open)",
+   "why": "With honest stop exits, excess over random is −0.14R to +0.15R; no monthly t above 1.4. The old 1.2–1.7 Sharpe was the exit lookahead."
+  },
+  {
+   "name": "Day-of-week and hour-of-day effects",
+   "why": "No weekday or UTC hour clears the multiple-testing line; the best (22:00 UTC, 0.054%/hr) is a third of trading costs and fades."
+  },
+  {
+   "name": "Level revisit + break of structure (Monday / last-week high-low)",
+   "why": "45,877 trades, 4 pre-registered cells: −0.02 to −0.05R per trade. About +0.03R better than random timing, too thin to beat fees. Multi-timeframe version (4h structure, 1h/15m entry): 1h entry broke even (+0.015R, t 0.45); 15m entry −0.10R after fees."
+  }
+ ]
+}</script>
+<script>
+"use strict";
+/* ======================================================================
+   Night Desk -- fund view
+   Read-only. The only network calls are POSTs of public "info" queries,
+   to Hyperliquid directly or to the bundled relay when served by it.
+   ====================================================================== */
+
+const UPSTREAM = "https://api.hyperliquid.xyz/info";
+const ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
+const KEY = "nightdesk.v2";
+const PERIODS = { acct: 15000, slow: 30000, market: 60000 };
+const IV_MS = { "5m": 3e5, "15m": 9e5, "1h": 3.6e6, "4h": 1.44e7 };
+const IV_BARS = 120;
+const RANGES = [["day", "24h"], ["week", "7d"], ["month", "30d"], ["allTime", "All"]];
+const STATUS_ORDER = { live: 0, paper: 1, testing: 2, research: 3, retired: 4 };
+
+/* ---------------- helpers ---------------- */
+const $ = (id) => document.getElementById(id);
+const fin = Number.isFinite;
+function num(x) { const v = typeof x === "number" ? x : Number.parseFloat(x); return fin(v) ? v : NaN; }
+function usd(v, dp) { if (!fin(v)) return "–"; const a = Math.abs(v), d = dp ?? (a >= 1000 ? 0 : 2); return (v < 0 ? "-$" : "$") + a.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }); }
+function sUsd(v, dp) { return fin(v) ? (v > 0 ? "+" : "") + usd(v, dp) : "–"; }
+function compact(v) { if (!fin(v)) return "–"; const a = Math.abs(v); const s = a >= 1e9 ? (a / 1e9).toFixed(2) + "B" : a >= 1e6 ? (a / 1e6).toFixed(1) + "M" : a >= 1e3 ? (a / 1e3).toFixed(1) + "k" : a.toFixed(0); return (v < 0 ? "-$" : "$") + s; }
+function pct(v, dp = 2, sign = true) { return fin(v) ? (sign && v > 0 ? "+" : "") + (v * 100).toFixed(dp) + "%" : "–"; }
+function px(v) { if (!fin(v)) return "–"; const a = Math.abs(v), d = a >= 1000 ? 1 : a >= 100 ? 2 : a >= 1 ? 4 : a >= 0.01 ? 5 : 7; return v.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }); }
+function cls(v) { return !fin(v) || v === 0 ? "" : v > 0 ? "pos" : "neg"; }
+function hhmm(t) { return new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
+function ago(t) { if (!t) return "never"; const s = Math.round((Date.now() - t) / 1000); return s < 60 ? s + "s ago" : Math.round(s / 60) + "m ago"; }
+function short(a) { return a ? a.slice(0, 6) + "…" + a.slice(-4) : ""; }
+function el(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) { if (k === "class") e.className = v; else if (k === "text") e.textContent = v; else e.setAttribute(k, v); }
+  for (const c of kids) if (c != null) e.append(c);
+  return e;
+}
+function td(text, className) { return el("td", { class: className || "", text }); }
+function chip(kind, text) { return el("span", { class: "chip " + kind, text: text || kind }); }
+function stat(k, v, s, vcls) { return el("div", { class: "stat" }, el("div", { class: "k", text: k }), el("div", { class: "v " + (vcls || ""), text: v }), el("div", { class: "s", text: s || " " })); }
+
+/* ---------------- per-viewer settings ---------------- */
+function loadCfg() { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (_) { return {}; } }
+const cfg = Object.assign({ live: false, theme: "", iv: "15m", range: { fund: "month", bot: "day", strat: "month" }, coin: {}, accounts: {}, links: {}, limits: {} }, loadCfg());
+function saveCfg() { try { localStorage.setItem(KEY, JSON.stringify(cfg)); } catch (_) { /* storage blocked: settings last this visit only */ } }
+
+/* ---------------- registry ---------------- */
+let FUND = null;
+function parseRegistry(j) {
+  if (!j || !Array.isArray(j.bots)) throw new Error("fund registry has no bots");
+  for (const b of j.bots) {
+    b.accounts = Array.isArray(b.accounts) ? b.accounts : [];
+    b.strategies = Array.isArray(b.strategies) ? b.strategies : [];
+    b.limits = Object.assign({ start: "", floorPct: 6, dailyPct: 3, maxLev: 3 }, b.limits || {});
+  }
+  j.retired = Array.isArray(j.retired) ? j.retired : [];
+  return j;
+}
+async function loadRegistry() {
+  let reg = null;
+  if (/^https?:$/.test(location.protocol)) {
+    try { const r = await fetch("fund.json", { cache: "no-store" }); if (r.ok) reg = parseRegistry(await r.json()); }
+    catch (_) { /* fall back to the copy built into this page */ }
+  }
+  if (!reg) reg = parseRegistry(JSON.parse($("fundDefault").textContent));
+  return reg;
+}
+/* accounts for a bot = registry accounts + ones the viewer added, with viewer-edited addresses */
+function botAccounts(bot) {
+  const extra = (cfg.accounts[bot.id] || []);
+  const list = bot.accounts.map((a, i) => ({ ...a, key: bot.id + ":r" + i }));
+  for (const [i, a] of extra.entries()) list.push({ label: a.label || "Account " + (i + 1), venue: "hyperliquid", address: a.address || "", key: bot.id + ":u" + i, user: true });
+  for (const a of list) { const o = cfg.accounts["@" + a.key]; if (o !== undefined && !a.user) a.address = o; }
+  return list;
+}
+function strategyAccount(bot, s) {
+  const key = cfg.links[bot.id + "/" + s.id] || s.account || "";
+  return botAccounts(bot).find((a) => a.key === key) || null;
+}
+function liveAddrsOfBot(bot) { return [...new Set(botAccounts(bot).filter((a) => a.venue !== "bybit" && ADDR_RE.test(a.address)).map((a) => a.address.toLowerCase()))]; }
+
+/* ---------------- transport ---------------- */
+let apiUrl = UPSTREAM;
+async function detectRelay() {
+  if (!/^https?:$/.test(location.protocol)) return;
+  try {
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 2500);
+    const r = await fetch("health", { signal: ctl.signal, cache: "no-store" }); clearTimeout(t);
+    if (r.ok) { const j = await r.json(); if (j && j.relay === "night-desk") apiUrl = "info"; }
+  } catch (_) { /* not behind the relay: talk to Hyperliquid directly */ }
+}
+async function info(body, timeoutMs = 10000) {
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const r = await fetch(apiUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: ctl.signal, cache: "no-store" });
+    if (r.status === 429) throw new Error("rate limited");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return await r.json();
+  } catch (e) {
+    if (e.name === "AbortError") throw new Error("timed out after " + timeoutMs / 1000 + "s");
+    if (e instanceof TypeError) throw new Error("network blocked or offline");
+    throw e;
+  } finally { clearTimeout(t); }
+}
+
+/* ---------------- parsing: every field validated ---------------- */
+function parseAcct(j) {
+  if (!j || typeof j !== "object") throw new Error("unexpected account response");
+  const ms = j.marginSummary || j.crossMarginSummary || {};
+  const positions = (Array.isArray(j.assetPositions) ? j.assetPositions : []).map((a) => a && a.position).filter(Boolean).map((p) => ({
+    coin: String(p.coin || "?"), size: num(p.szi), entry: num(p.entryPx), value: num(p.positionValue), upnl: num(p.unrealizedPnl),
+    liq: num(p.liquidationPx), lev: num(p.leverage && p.leverage.value), levType: (p.leverage && p.leverage.type) || "", margin: num(p.marginUsed),
+  })).filter((p) => fin(p.size) && p.size !== 0);
+  return { av: num(ms.accountValue), ntl: num(ms.totalNtlPos), marginUsed: num(ms.totalMarginUsed), withdrawable: num(j.withdrawable), positions };
+}
+function parseFills(a) {
+  if (!Array.isArray(a)) throw new Error("unexpected fills response");
+  return a.map((f) => ({ coin: String(f.coin || "?"), px: num(f.px), sz: num(f.sz), side: f.side === "B" ? "B" : "A", time: num(f.time), dir: String(f.dir || (f.side === "B" ? "Buy" : "Sell")), pnl: num(f.closedPnl), fee: num(f.fee) }))
+    .filter((f) => fin(f.time) && fin(f.px)).sort((x, y) => y.time - x.time);
+}
+function parsePortfolio(a) {
+  const out = {};
+  if (!Array.isArray(a)) return out;
+  for (const item of a) {
+    if (!Array.isArray(item) || item.length < 2) continue;
+    const hist = (arr) => (Array.isArray(arr) ? arr : []).map((p) => [num(p[0]), num(p[1])]).filter((p) => fin(p[0]) && fin(p[1]));
+    out[item[0]] = { av: hist(item[1] && item[1].accountValueHistory), pnl: hist(item[1] && item[1].pnlHistory) };
+  }
+  return out;
+}
+function parseMeta(j) {
+  if (!Array.isArray(j) || j.length < 2) throw new Error("unexpected market response");
+  const uni = (j[0] && j[0].universe) || [], ctx = j[1] || [], out = {};
+  uni.forEach((u, i) => {
+    const c = ctx[i] || {}, mark = num(c.markPx), prev = num(c.prevDayPx), oi = num(c.openInterest);
+    out[u.name] = { name: u.name, delisted: !!u.isDelisted, mark, chg: fin(mark) && fin(prev) && prev > 0 ? mark / prev - 1 : NaN, funding: num(c.funding), oiUsd: fin(oi) && fin(mark) ? oi * mark : NaN, vol: num(c.dayNtlVlm), premium: num(c.premium) };
+  });
+  return out;
+}
+function parseCandles(a) {
+  if (!Array.isArray(a)) throw new Error("unexpected candle response");
+  return a.map((c) => ({ t: num(c.t), o: num(c.o), h: num(c.h), l: num(c.l), c: num(c.c), v: num(c.v) })).filter((c) => fin(c.t) && fin(c.o) && fin(c.h) && fin(c.l) && fin(c.c) && c.h >= c.l).sort((x, y) => x.t - y.t);
+}
+
+/* ---------------- state ---------------- */
+// A: per-address data. meta: market. candles: chart. view: current route.
+const S = { mode: "demo", A: {}, meta: {}, candles: [], candleKey: "", lastMarket: 0, err: {}, backoff: {}, view: { kind: "fund" } };
+function acctState(addr) { return S.A[addr] || (S.A[addr] = { acct: null, fills: [], port: {}, last: 0, err: null, backoff: null }); }
+
+/* ---------------- demo data: clearly example figures ---------------- */
+function rng(seed) { let s = seed >>> 0; return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; }
+function hash(str) { let h = 2166136261; for (const ch of str) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return h >>> 0; }
+const DEMO_COINS = { BTC: 91250, ETH: 3120, SOL: 141.2, XRP: 0.9458, HYPE: 31.4, DOGE: 0.1612, SUI: 1.62, AVAX: 13.9, LINK: 13.1, BNB: 612, ADA: 0.452, ENA: 0.288, WLD: 0.71, LTC: 84.2, AAVE: 168, NEAR: 1.97, TIA: 0.84, ARB: 0.214, OP: 0.402, APT: 2.21, GOLD: 2640, SILVER: 31.2, SP500: 6012, NDX: 21140, OIL: 71.4 };
+function demoMeta() {
+  const r = rng(11), out = {}; let i = 0;
+  for (const [c, mark] of Object.entries(DEMO_COINS)) { const chg = (r() - 0.5) * 0.1; out[c] = { name: c, delisted: false, mark, chg, funding: (r() - 0.35) * 0.00004, oiUsd: (2.2e9 / (++i)) * (0.6 + r() * 0.8), vol: (5e9 / (i + 0.4)) * (0.5 + r()), premium: (r() - 0.5) * 0.0008 }; }
+  return out;
+}
+function demoAccount(addr, coins, avTarget, longOnly) {
+  const r = rng(hash(addr)), now = Date.now(), meta = S.meta;
+  const positions = coins.slice(0, 1 + Math.floor(r() * coins.length)).map((coin, i) => {
+    // example sizing kept near 1x gross so the demo does not model reckless leverage
+    const mark = meta[coin] ? meta[coin].mark : 100, long = longOnly || r() < 0.55, notional = avTarget * (0.08 + r() * 0.17);
+    const entry = mark * (1 + (r() - 0.5) * 0.05), size = (long ? 1 : -1) * notional / mark, lev = 2 + (i % 2);
+    return { coin, size, entry, value: notional, upnl: size * (mark - entry), liq: long ? entry * (1 - 0.9 / lev) : entry * (1 + 0.9 / lev), lev, levType: "cross", margin: notional / lev };
+  });
+  const acct = { av: avTarget, ntl: positions.reduce((s, p) => s + p.value, 0), marginUsed: positions.reduce((s, p) => s + p.margin, 0), withdrawable: avTarget * 0.6, positions };
+  const fills = []; let t = now - 23 * 3.6e6;
+  for (let i = 0; i < 18; i++) {
+    t += (0.5 + r()) * 3.6e6; if (t > now) break;
+    const coin = coins[Math.floor(r() * coins.length)], open = r() < 0.5, long = longOnly || r() < 0.55, p0 = (meta[coin] ? meta[coin].mark : 100) * (1 + (r() - 0.5) * 0.03), sz = avTarget * (0.05 + r() * 0.15) / p0;
+    fills.push({ coin, px: p0, sz, side: open === long ? "B" : "A", time: t, dir: (open ? "Open " : "Close ") + (long ? "Long" : "Short"), pnl: open ? 0 : (r() < 0.52 ? 1 : -1) * avTarget * (0.002 + r() * 0.01), fee: p0 * sz * 0.00045 });
+  }
+  fills.sort((a, b) => b.time - a.time);
+  const port = {};
+  for (const [k, n, step, drift] of [["day", 96, 9e5, 0.04], ["week", 168, 3.6e6, 0.05], ["month", 120, 2.16e7, 0.06], ["allTime", 150, 8.64e7, 0.07]]) {
+    let v = 0; const raw = [];
+    for (let i = n; i >= 0; i--) { v += (r() - 0.5 + drift) * 0.004; raw.push([now - i * step, v]); }
+    const span = raw[raw.length - 1][1] - raw[0][1] || 1, growth = k === "day" ? 0.01 : k === "week" ? 0.025 : k === "month" ? 0.06 : 0.25;
+    const av = raw.map(([tt, x]) => [tt, avTarget / (1 + growth) * (1 + growth * (x - raw[0][1]) / span)]);
+    port[k] = { av, pnl: av.map(([tt, x]) => [tt, x - av[0][1]]) };
+  }
+  return { acct, fills, port, last: now, err: null, backoff: null };
+}
+/* demo accounts: one sub-account per paper strategy, so the click-through has something to show */
+const DEMO_ADDR = (bot, s) => "0x" + (hash(bot + s).toString(16).padStart(8, "0").repeat(5)).slice(0, 40);
+function demoPlan() {
+  const plan = [];
+  for (const b of FUND.bots) {
+    const coins = b.id === "macro" ? ["GOLD", "SILVER", "SP500", "NDX", "OIL"] : ["ETH", "SOL", "XRP", "HYPE", "LINK", "BTC"];
+    for (const s of b.strategies) if (s.status === "paper" || s.status === "live") plan.push({ bot: b, s, addr: DEMO_ADDR(b.id, s.id), coins, av: b.id === "macro" ? 4200 : 1500 + (hash(s.id) % 900) });
+    if (b.id === "macro") plan.push({ bot: b, s: null, addr: DEMO_ADDR(b.id, "main"), coins, av: 5000 });
+  }
+  return plan;
+}
+function demoCandles(coin, iv) {
+  const r = rng(hash(coin + iv)), step = IV_MS[iv], now = Date.now(), end = (S.meta[coin] && S.meta[coin].mark) || 100, out = [];
+  let p = end * (1 + (r() - 0.5) * 0.06);
+  for (let i = IV_BARS - 1; i >= 0; i--) { const o = p, c = o * (1 + (r() - 0.5) * 0.012 * Math.sqrt(step / 9e5)); out.push({ t: Math.floor((now - i * step) / step) * step, o, h: Math.max(o, c) * (1 + r() * 0.004), l: Math.min(o, c) * (1 - r() * 0.004), c, v: r() * 1e4 }); p = c; }
+  const k = end / out[out.length - 1].c;
+  return out.map((b) => ({ ...b, o: b.o * k, h: b.h * k, l: b.l * k, c: b.c * k }));
+}
+
+/* ---------------- fetching ---------------- */
+function backoff(rec) { const prev = rec.backoff ? rec.backoff.wait : 0, wait = Math.min(Math.max(prev * 2, 5000), 300000); rec.backoff = { wait, until: Date.now() + wait }; }
+async function fetchAcct(addr, full) {
+  const rec = acctState(addr);
+  if (rec.backoff && Date.now() < rec.backoff.until) return;
+  try {
+    rec.acct = parseAcct(await info({ type: "clearinghouseState", user: addr }));
+    if (full) { rec.fills = parseFills(await info({ type: "userFills", user: addr })).slice(0, 400); rec.port = parsePortfolio(await info({ type: "portfolio", user: addr })); }
+    rec.last = Date.now(); rec.err = null; rec.backoff = null;
+  } catch (e) { rec.err = e.message || String(e); backoff(rec); }
+}
+async function fetchMarket() {
+  if (S.backoff.market && Date.now() < S.backoff.market) return;
+  try { S.meta = parseMeta(await info({ type: "metaAndAssetCtxs" })); S.lastMarket = Date.now(); delete S.err.market; delete S.backoff.market; }
+  catch (e) { S.err.market = e.message; S.backoff.market = Date.now() + 30000; }
+}
+async function fetchCandles() {
+  const coin = currentCoin(); if (!coin) return;
+  const key = coin + "|" + cfg.iv;
+  if (S.mode === "demo") { S.candles = demoCandles(coin, cfg.iv); S.candleKey = key; return; }
+  try {
+    const step = IV_MS[cfg.iv], end = Date.now();
+    S.candles = parseCandles(await info({ type: "candleSnapshot", req: { coin, interval: cfg.iv, startTime: end - IV_BARS * step, endTime: end } }));
+    S.candleKey = key; delete S.err.candles;
+  } catch (e) { S.err.candles = e.message; }
+}
+function allLiveAddrs() { return [...new Set(FUND.bots.flatMap(liveAddrsOfBot))]; }
+
+const timers = [];
+function clearTimers() { while (timers.length) clearInterval(timers.pop()); }
+async function refreshAll() {
+  await fetchMarket();
+  await Promise.all(allLiveAddrs().map((a) => fetchAcct(a, true)));
+  if (S.view.kind === "bot") await fetchCandles();
+  render();
+}
+function startLive() {
+  clearTimers(); S.mode = "live"; S.A = {}; S.err = {}; S.backoff = {}; S.candles = []; S.candleKey = "";
+  cfg.live = true; saveCfg();
+  $("demoBanner").hidden = true; $("modeBtn").textContent = "Show example data";
+  refreshAll();
+  const every = (ms, f) => timers.push(setInterval(() => { if (!document.hidden) f().then(render); }, ms));
+  every(PERIODS.acct, () => Promise.all(allLiveAddrs().map((a) => fetchAcct(a, false))));
+  every(PERIODS.slow, () => Promise.all(allLiveAddrs().map((a) => fetchAcct(a, true))));
+  every(PERIODS.market, async () => { await fetchMarket(); if (S.view.kind === "bot") await fetchCandles(); });
+}
+function startDemo() {
+  clearTimers(); S.mode = "demo"; S.A = {}; S.err = {}; S.backoff = {};
+  cfg.live = false; saveCfg();
+  S.meta = demoMeta(); S.lastMarket = Date.now();
+  for (const p of demoPlan()) S.A[p.addr.toLowerCase()] = demoAccount(p.addr, p.coins, p.av, !!(p.s && p.s.longOnly));
+  $("demoBanner").hidden = false; $("modeBtn").textContent = "Use my accounts";
+  fetchCandles().then(render);
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden && S.mode === "live") refreshAll(); });
+
+/* ---------------- aggregation ---------------- */
+/* Which addresses feed a bot: in demo, the demo sub-accounts; live, the bot's real ones. */
+function botAddrs(bot) {
+  if (S.mode === "demo") return demoPlan().filter((p) => p.bot.id === bot.id).map((p) => p.addr.toLowerCase());
+  return liveAddrsOfBot(bot);
+}
+function stratAddr(bot, s) {
+  if (S.mode === "demo") { const p = demoPlan().find((q) => q.bot.id === bot.id && q.s && q.s.id === s.id); return p ? p.addr.toLowerCase() : ""; }
+  const a = strategyAccount(bot, s); return a && ADDR_RE.test(a.address) ? a.address.toLowerCase() : "";
+}
+function addrStrategy(bot, addr) {
+  for (const s of bot.strategies) if (stratAddr(bot, s) === addr) return s.name;
+  if (S.mode === "demo") return "unassigned";
+  const a = botAccounts(bot).find((x) => (x.address || "").toLowerCase() === addr); return a ? a.label : short(addr);
+}
+/* Sum several equity histories onto the first one's time grid (carry-forward on the others). */
+function sumSeries(list) {
+  const ok = list.filter((s) => s && s.length);
+  if (!ok.length) return [];
+  const grid = ok.reduce((a, b) => (b.length > a.length ? b : a));
+  return grid.map(([t]) => [t, ok.reduce((sum, s) => {
+    let v = s[0][1];
+    for (const [tt, x] of s) { if (tt <= t) v = x; else break; }
+    return sum + v;
+  }, 0)]);
+}
+function aggregate(addrs, bot) {
+  const recs = addrs.map((a) => [a, S.A[a]]).filter(([, r]) => r);
+  const withAcct = recs.filter(([, r]) => r.acct);
+  const acct = withAcct.length ? {
+    av: withAcct.reduce((s, [, r]) => s + (fin(r.acct.av) ? r.acct.av : 0), 0),
+    ntl: withAcct.reduce((s, [, r]) => s + (fin(r.acct.ntl) ? r.acct.ntl : 0), 0),
+    marginUsed: withAcct.reduce((s, [, r]) => s + (fin(r.acct.marginUsed) ? r.acct.marginUsed : 0), 0),
+    withdrawable: withAcct.reduce((s, [, r]) => s + (fin(r.acct.withdrawable) ? r.acct.withdrawable : 0), 0),
+    positions: withAcct.flatMap(([a, r]) => r.acct.positions.map((p) => ({ ...p, owner: bot ? addrStrategy(bot, a) : "" }))),
+  } : null;
+  const fills = recs.flatMap(([a, r]) => r.fills.map((f) => ({ ...f, owner: bot ? addrStrategy(bot, a) : "" }))).sort((x, y) => y.time - x.time);
+  const port = {};
+  for (const [k] of RANGES) port[k] = { av: sumSeries(recs.map(([, r]) => r.port[k] && r.port[k].av)), pnl: sumSeries(recs.map(([, r]) => r.port[k] && r.port[k].pnl)) };
+  const last = recs.length ? Math.min(...recs.map(([, r]) => r.last || 0)) : 0;
+  const errs = recs.filter(([, r]) => r.err).map(([a, r]) => short(a) + ": " + r.err);
+  return { acct, fills, port, last, errs, n: recs.length };
+}
+function markOf(coin) { const m = S.meta[coin]; return m && fin(m.mark) ? m.mark : NaN; }
+function positionsView(acct) {
+  if (!acct) return [];
+  return acct.positions.map((p) => {
+    const mark = fin(markOf(p.coin)) ? markOf(p.coin) : fin(p.value) && p.size ? Math.abs(p.value / p.size) : p.entry;
+    const notional = p.size * mark, f = S.meta[p.coin] ? S.meta[p.coin].funding : NaN;
+    return { ...p, mark, notional, toLiq: fin(p.liq) && p.liq > 0 ? Math.abs(mark - p.liq) / mark : NaN, fundDay: fin(f) ? notional * f * 24 : NaN, fundAnn: fin(f) ? f * 8760 : NaN };
+  });
+}
+const lastOf = (h) => (h && h.length ? h[h.length - 1][1] : NaN);
+const firstOf = (h) => (h && h.length ? h[0][1] : NaN);
+function limitsOf(bot) { return Object.assign({}, bot.limits, cfg.limits[bot.id] || {}); }
+
+/* ---------------- risk checks ---------------- */
+function computeChecks(agg, lim) {
+  const a = agg.acct, pv = positionsView(a), out = [], av = a ? a.av : NaN, start = num(lim.start);
+  const day = agg.port.day ? lastOf(agg.port.day.pnl) : NaN;
+  const age = agg.last ? Date.now() - agg.last : Infinity;
+  out.push({ t: "Data feed", v: S.mode === "demo" ? "example" : agg.n ? ago(agg.last) : "no accounts",
+    lvl: S.mode === "demo" ? "idle" : !agg.n ? "idle" : age > 90000 ? "alert" : age > 40000 || agg.errs.length ? "watch" : "ok",
+    d: agg.errs.length ? "Errors: " + agg.errs.join("; ") : agg.n ? agg.n + " account" + (agg.n > 1 ? "s" : "") + " · refreshed every 15–30 s." : "Add a Hyperliquid address in Accounts to start." });
+  if (fin(start) && start > 0 && fin(av)) {
+    const floor = start * (1 - lim.floorPct / 100), room = av - floor, budget = start * lim.floorPct / 100;
+    out.push({ t: "Floor guard", v: sUsd(room), lvl: room < budget * 0.35 ? "alert" : room < budget * 0.6 ? "watch" : "ok", d: `Floor ${usd(floor)} (${lim.floorPct}% under ${usd(start)}). ${room <= 0 ? "Breached." : pct(room / budget, 0, false) + " of the loss budget left."}` });
+  } else out.push({ t: "Floor guard", v: "set start", lvl: "idle", d: "Enter the starting balance below to track distance to the drawdown floor." });
+  const dBase = fin(start) && start > 0 ? start : av;
+  if (fin(day) && fin(dBase)) { const limv = dBase * lim.dailyPct / 100, used = day < 0 ? -day / limv : 0; out.push({ t: "Daily loss", v: sUsd(day), lvl: used >= 0.75 ? "alert" : used >= 0.5 ? "watch" : "ok", d: `Limit ${usd(-limv)} (${lim.dailyPct}%). ${day < 0 ? pct(used, 0, false) + " used" : "No loss in the last 24h"}.` }); }
+  if (a && fin(a.ntl) && fin(av) && av > 0) { const lev = a.ntl / av, mx = num(lim.maxLev); out.push({ t: "Gross leverage", v: lev.toFixed(2) + "×", lvl: fin(mx) && lev > mx ? "alert" : fin(mx) && lev > mx * 0.75 ? "watch" : "ok", d: `${compact(a.ntl)} notional on ${usd(av)}, cap ${fin(mx) ? mx + "×" : "not set"}. A ${(100 / Math.max(lev, 0.01)).toFixed(0)}% move against the whole book wipes it.` }); }
+  const liqs = pv.filter((p) => fin(p.toLiq));
+  if (liqs.length) { const n = liqs.reduce((m, p) => (p.toLiq < m.toLiq ? p : m)); out.push({ t: "Nearest liquidation", v: pct(n.toLiq, 1, false), lvl: n.toLiq < 0.05 ? "alert" : n.toLiq < 0.15 ? "watch" : "ok", d: `${n.coin} ${n.size > 0 ? "long" : "short"} (${n.owner || "account"}) liquidates at ${px(n.liq)}, mark ${px(n.mark)}.` }); }
+  if (pv.length) {
+    const net = pv.reduce((s, p) => s + p.notional, 0), gross = pv.reduce((s, p) => s + Math.abs(p.notional), 0);
+    out.push({ t: "Net exposure", v: fin(av) && av > 0 ? (net / av).toFixed(2) + "×" : compact(net), lvl: fin(av) && Math.abs(net / av) > 2 ? "watch" : "ok", d: `${compact(net)} net ${net >= 0 ? "long" : "short"} of ${compact(gross)} gross. A 5% market move ≈ ${sUsd(net * 0.05, 0)}.` });
+    const big = pv.reduce((m, p) => (Math.abs(p.notional) > Math.abs(m.notional) ? p : m)), share = gross > 0 ? Math.abs(big.notional) / gross : NaN;
+    out.push({ t: "Concentration", v: pct(share, 0, false), lvl: pv.length > 1 && share > 0.6 ? "watch" : "ok", d: `${big.coin} is the largest position, ${compact(Math.abs(big.notional))}.` });
+    const fd = pv.filter((p) => fin(p.fundDay)).reduce((s, p) => s + p.fundDay, 0);
+    out.push({ t: "Funding", v: (fd > 0 ? "-" : "+") + usd(Math.abs(fd)) + "/day", lvl: fin(av) && fd > av * 0.002 ? "watch" : "ok", d: fd > 0 ? "Paying funding at current rates." : "Receiving funding at current rates." });
+    const crowded = pv.filter((p) => fin(p.fundAnn) && ((p.size > 0 && p.fundAnn > 0.3) || (p.size < 0 && p.fundAnn < -0.3)));
+    out.push({ t: "Crowded side", v: crowded.length ? crowded.map((p) => p.coin).join(", ") : "none", lvl: crowded.length ? "watch" : "ok", d: crowded.length ? "Positioned with the crowd: funding above 30%/yr in your direction." : "No position is on a side paying over 30%/yr funding." });
+  }
+  const closes = agg.fills.filter((f) => fin(f.pnl) && f.pnl !== 0).slice(0, 50);
+  if (closes.length >= 5) {
+    const w = closes.filter((f) => f.pnl > 0), l = closes.filter((f) => f.pnl < 0), exp = closes.reduce((s, f) => s + f.pnl, 0) / closes.length;
+    out.push({ t: "Recent closes", v: pct(w.length / closes.length, 0, false) + " win", lvl: exp < 0 ? "watch" : "ok", d: `Last ${closes.length}: avg win ${sUsd(w.length ? w.reduce((s, f) => s + f.pnl, 0) / w.length : 0)}, avg loss ${sUsd(l.length ? l.reduce((s, f) => s + f.pnl, 0) / l.length : 0)}, ${sUsd(exp)} per close.` });
+  }
+  return out;
+}
+function worstLevel(checks) { return checks.some((c) => c.lvl === "alert") ? "alert" : checks.some((c) => c.lvl === "watch") ? "watch" : checks.some((c) => c.lvl === "ok") ? "ok" : "idle"; }
+
+/* ---------------- routing ---------------- */
+function route() {
+  const h = location.hash.replace(/^#/, "");
+  let m;
+  if ((m = h.match(/^bot-([a-z0-9-]+)$/)) && FUND.bots.some((b) => b.id === m[1])) S.view = { kind: "bot", bot: m[1] };
+  else if ((m = h.match(/^s-([a-z0-9]+)-([a-z0-9-]+)$/)) && FUND.bots.some((b) => b.id === m[1] && b.strategies.some((s) => s.id === m[2]))) S.view = { kind: "strat", bot: m[1], strat: m[2] };
+  else S.view = { kind: "fund" };
+  $("vFund").hidden = S.view.kind !== "fund"; $("vBot").hidden = S.view.kind !== "bot"; $("vStrat").hidden = S.view.kind !== "strat";
+  hoverIdx = -1;
+  if (S.view.kind === "bot") { syncBotForms(); fetchCandles().then(render); }
+  render();
+  window.scrollTo({ top: 0 });
+}
+window.addEventListener("hashchange", () => { if (FUND) route(); });
+const botById = (id) => FUND.bots.find((b) => b.id === id);
+
+/* ---------------- rendering: shared ---------------- */
+function renderFeed() {
+  if (!FUND) return;
+  let lvl = "ok", text;
+  const addrs = S.mode === "live" ? allLiveAddrs() : [];
+  if (S.mode === "demo") { lvl = "watch"; text = "example data"; }
+  else if (!addrs.length) { lvl = "watch"; text = "no accounts added"; }
+  else {
+    const recs = addrs.map((a) => S.A[a]).filter(Boolean), last = recs.length ? Math.min(...recs.map((r) => r.last || 0)) : 0;
+    const errs = recs.filter((r) => r.err).length + Object.keys(S.err).length, age = last ? Date.now() - last : Infinity;
+    text = last ? "live · " + ago(last) : errs ? "cannot reach Hyperliquid" : "connecting";
+    lvl = !last ? (errs ? "alert" : "watch") : age > 90000 ? "alert" : errs || age > 40000 ? "watch" : "ok";
+    const eb = $("errBanner"), msgs = [...recs.filter((r) => r.err).map((r) => r.err), ...Object.entries(S.err).map(([k, v]) => k + ": " + v)];
+    if (msgs.length) { eb.textContent = "Some data could not load (" + [...new Set(msgs)].join("; ") + ")." + (apiUrl === UPSTREAM && !last ? " If your browser blocks direct calls to Hyperliquid, run night_desk_server.py and open the page it serves." : " Retrying automatically."); eb.hidden = false; } else eb.hidden = true;
+  }
+  if (S.mode === "demo") $("errBanner").hidden = true;
+  $("feedDot").className = "dot " + lvl; $("feedText").textContent = text;
+}
+function renderCrumbs() {
+  const c = $("crumbs"); c.replaceChildren();
+  const link = (href, text) => el("a", { href, text });
+  if (S.view.kind === "fund") { c.append(el("b", { text: "Fund" })); return; }
+  const bot = botById(S.view.bot);
+  c.append(link("#fund", "Fund"), "›");
+  if (S.view.kind === "bot") c.append(el("b", { text: bot.name }));
+  else { c.append(link("#bot-" + bot.id, bot.name), "›", el("b", { text: bot.strategies.find((s) => s.id === S.view.strat).name })); }
+}
+function rangeButtons() {
+  for (const seg of document.querySelectorAll("[data-range-for]")) {
+    const which = seg.dataset.rangeFor;
+    if (!seg.childElementCount) for (const [k, lab] of RANGES) {
+      const b = el("button", { type: "button", "data-r": k, text: lab });
+      b.addEventListener("click", () => { cfg.range[which] = k; saveCfg(); render(); });
+      seg.append(b);
+    }
+    for (const b of seg.children) b.setAttribute("aria-pressed", String(b.dataset.r === cfg.range[which]));
+  }
+}
+function evidenceLine(s) {
+  const e = s.evidence;
+  if (e && fin(e.oos)) return `out of sample ${e.oos.toFixed(2)} · t ${fin(e.t) ? e.t.toFixed(2) : "–"}`;
+  return s.blocker ? "blocked: " + s.blocker : s.gate || "";
+}
+
+/* ---------------- fund view ---------------- */
+function renderFund() {
+  const allAddrs = [...new Set(FUND.bots.flatMap(botAddrs))];
+  const agg = aggregate(allAddrs, null), a = agg.acct, pv = positionsView(a);
+  const day = agg.port.day ? lastOf(agg.port.day.pnl) : NaN, dayBase = agg.port.day ? firstOf(agg.port.day.av) : NaN;
+  const all = FUND.bots.flatMap((b) => b.strategies), count = (st) => all.filter((s) => s.status === st).length;
+  const alerts = FUND.bots.reduce((n, b) => n + computeChecks(aggregate(botAddrs(b), b), limitsOf(b)).filter((c) => c.lvl === "alert").length, 0);
+  const upnl = pv.reduce((s, p) => s + (fin(p.upnl) ? p.upnl : 0), 0);
+  $("fundStrip").replaceChildren(
+    stat("Fund equity", a ? usd(a.av) : "–", a ? `${agg.n} account${agg.n === 1 ? "" : "s"}` : "no accounts yet"),
+    stat("P&L 24h", sUsd(day), fin(day) && dayBase > 0 ? pct(day / dayBase) : "", cls(day)),
+    stat("Unrealized", a ? sUsd(upnl) : "–", a && a.av > 0 ? pct(upnl / a.av) + " of equity" : "", cls(upnl)),
+    stat("Gross leverage", a && a.av > 0 ? (a.ntl / a.av).toFixed(2) + "×" : "–", a ? compact(a.ntl) + " notional" : ""),
+    stat("Strategies", `${count("live")} live`, `${count("paper")} paper · ${count("testing")} testing · ${count("research")} research`),
+    stat("Risk alerts", String(alerts), alerts ? "open a bot to see which" : "all bots within limits", alerts ? "neg" : ""));
+
+  const cards = $("botCards"); cards.replaceChildren();
+  for (const b of FUND.bots) {
+    const ag = aggregate(botAddrs(b), b), ck = computeChecks(ag, limitsOf(b)), lvl = worstLevel(ck);
+    const d = ag.port.day ? lastOf(ag.port.day.pnl) : NaN;
+    const st = b.strategies.slice().sort((x, y) => STATUS_ORDER[x.status] - STATUS_ORDER[y.status]);
+    const pending = botAccounts(b).filter((x) => x.venue === "bybit");
+    const btn = el("button", { type: "button", class: "card", "aria-label": "Open " + b.name },
+      el("div", { class: "top" }, el("span", { class: "name", text: b.name }), chip(lvl, { ok: "within limits", watch: "watch", alert: "alert", idle: "not trading" }[lvl])),
+      el("div", { class: "venue", text: b.asset + " · " + b.venue }),
+      el("div", { class: "row" },
+        el("div", { class: "fig" }, el("div", { class: "k", text: "Equity" }), el("div", { class: "v", text: ag.acct ? usd(ag.acct.av) : "–" })),
+        el("div", { class: "fig" }, el("div", { class: "k", text: "24h" }), el("div", { class: "v " + cls(d), text: sUsd(d) })),
+        el("div", { class: "fig" }, el("div", { class: "k", text: "Positions" }), el("div", { class: "v", text: ag.acct ? String(ag.acct.positions.length) : "–" }))),
+      el("div", { class: "tags" }, ...st.map((s) => el("span", { class: "chip " + s.status, text: s.name + " · " + s.status }))),
+      pending.length ? el("div", { class: "ev", text: pending.map((x) => x.label + ": not connected").join(" · ") }) : null);
+    btn.addEventListener("click", () => { location.hash = "bot-" + b.id; });
+    cards.append(btn);
+  }
+  drawEquity("fundEqCv", "fundEqEmpty", "fundEqInfo", agg.port[cfg.range.fund] ? agg.port[cfg.range.fund].av : [], NaN, agg.n ? "" : "Add accounts to a bot to see fund equity.");
+
+  const pipe = $("pipeBody"); pipe.replaceChildren();
+  const rows = FUND.bots.flatMap((b) => b.strategies.map((s) => ({ b, s }))).sort((x, y) => STATUS_ORDER[x.s.status] - STATUS_ORDER[y.s.status]);
+  for (const { b, s } of rows) {
+    const tr = el("tr", { class: "click" });
+    const e = s.evidence;
+    tr.append(td(s.name), td(b.name), el("td", {}, chip(s.status)), td(e && fin(e.oos) ? `${e.oos.toFixed(2)} (fit ${fin(e.fit) ? e.fit.toFixed(2) : "–"})` : "–"), td(s.blocker || s.gate || "", "txt"));
+    tr.addEventListener("click", () => { location.hash = `s-${b.id}-${s.id}`; });
+    pipe.append(tr);
+  }
+  const ret = $("retiredBody"); ret.replaceChildren();
+  for (const r of FUND.retired) ret.append(el("tr", {}, td(r.name), td(r.why, "txt")));
+}
+
+/* ---------------- bot view ---------------- */
+function renderBot() {
+  const bot = botById(S.view.bot), agg = aggregate(botAddrs(bot), bot), a = agg.acct, pv = positionsView(a), lim = limitsOf(bot), start = num(lim.start);
+  const day = agg.port.day ? lastOf(agg.port.day.pnl) : NaN, dayBase = agg.port.day ? firstOf(agg.port.day.av) : NaN;
+  const upnl = pv.reduce((s, p) => s + (fin(p.upnl) ? p.upnl : 0), 0), L = pv.filter((p) => p.size > 0).length;
+  $("botStrip").replaceChildren(
+    stat("Bot equity", a ? usd(a.av) : "–", a && fin(start) && start > 0 ? sUsd(a.av - start) + " vs start" : bot.asset),
+    stat("P&L 24h", sUsd(day), fin(day) && dayBase > 0 ? pct(day / dayBase) : "", cls(day)),
+    stat("Unrealized", a ? sUsd(upnl) : "–", a && a.av > 0 ? pct(upnl / a.av) + " of equity" : "", cls(upnl)),
+    stat("Gross leverage", a && a.av > 0 ? (a.ntl / a.av).toFixed(2) + "×" : "–", a ? compact(a.ntl) + " notional" : ""),
+    stat("Margin used", a && a.av > 0 ? pct(a.marginUsed / a.av, 0, false) : "–", a ? usd(a.marginUsed) + " in use" : ""),
+    stat("Open positions", a ? String(pv.length) : "–", a ? `${L} long · ${pv.length - L} short` : ""));
+
+  const cards = $("stratCards"); cards.replaceChildren();
+  for (const s of bot.strategies.slice().sort((x, y) => STATUS_ORDER[x.status] - STATUS_ORDER[y.status])) {
+    const addr = stratAddr(bot, s), rec = addr ? S.A[addr] : null, sd = rec && rec.port.day ? lastOf(rec.port.day.pnl) : NaN;
+    const btn = el("button", { type: "button", class: "card", "aria-label": "Open " + s.name },
+      el("div", { class: "top" }, el("span", { class: "name", text: s.name }), chip(s.status)),
+      el("div", { class: "sum", text: s.summary || "" }),
+      rec && rec.acct ? el("div", { class: "row" },
+        el("div", { class: "fig" }, el("div", { class: "k", text: "Equity" }), el("div", { class: "v", text: usd(rec.acct.av) })),
+        el("div", { class: "fig" }, el("div", { class: "k", text: "24h" }), el("div", { class: "v " + cls(sd), text: sUsd(sd) })),
+        el("div", { class: "fig" }, el("div", { class: "k", text: "Positions" }), el("div", { class: "v", text: String(rec.acct.positions.length) }))) : null,
+      el("div", { class: "ev", text: evidenceLine(s) }));
+    btn.addEventListener("click", () => { location.hash = `s-${bot.id}-${s.id}`; });
+    cards.append(btn);
+  }
+
+  const ck = computeChecks(agg, lim), list = $("checks"); list.replaceChildren();
+  let al = 0, wa = 0;
+  for (const c of ck) {
+    if (c.lvl === "alert") al++; if (c.lvl === "watch") wa++;
+    list.append(el("li", { class: "check " + c.lvl }, el("div", { class: "t" }, c.t, chip(c.lvl, { ok: "ok", watch: "watch", alert: "alert", idle: "–" }[c.lvl])), el("div", { class: "val", text: c.v }), el("div", { class: "d", text: c.d })));
+  }
+  $("checkSum").textContent = al ? `${al} alert${al > 1 ? "s" : ""}` : wa ? `${wa} to watch` : "all clear";
+  $("checkSum").style.color = al ? "var(--down)" : wa ? "var(--watch)" : "var(--up)";
+
+  renderAccounts(bot);
+
+  const pb = $("posBody"); pb.replaceChildren();
+  if (!pv.length) pb.append(el("tr", {}, el("td", { colspan: "10", text: a ? "No open positions." : "No account data yet.", style: "text-align:left;color:var(--muted)" })));
+  for (const p of pv.sort((x, y) => Math.abs(y.notional) - Math.abs(x.notional))) {
+    const tr = el("tr", { class: "click" });
+    tr.append(td(p.coin), td(p.owner || "–"), td(p.size > 0 ? "LONG" : "SHORT", "side " + (p.size > 0 ? "pos" : "neg")), td(compact(Math.abs(p.notional))), td(px(p.entry)), td(px(p.mark)), td(sUsd(p.upnl), cls(p.upnl)), td(fin(p.lev) ? p.lev + "×" : "–"), td(fin(p.toLiq) ? pct(p.toLiq, 1, false) : "–", fin(p.toLiq) && p.toLiq < 0.15 ? "neg" : ""), td(fin(p.fundDay) ? sUsd(-p.fundDay) : "–", cls(-p.fundDay)));
+    tr.addEventListener("click", () => selectCoin(p.coin));
+    pb.append(tr);
+  }
+  $("posInfo").textContent = pv.length ? "uPnL " + sUsd(upnl) : "";
+  const fb = $("fillBody"); fb.replaceChildren();
+  const fl = agg.fills.slice(0, 40);
+  if (!fl.length) fb.append(el("tr", {}, el("td", { colspan: "8", text: "No fills yet.", style: "text-align:left;color:var(--muted)" })));
+  for (const f of fl) {
+    const opening = /^open/i.test(f.dir), isLong = /long/i.test(f.dir), tr = el("tr", { class: "click" });
+    tr.append(td(hhmm(f.time)), td(f.coin), td(f.owner || "–"), td(f.dir, "side " + (opening ? (isLong ? "pos" : "neg") : "")), td(px(f.px)), td(compact(f.px * f.sz)), td(f.pnl ? sUsd(f.pnl) : "–", cls(f.pnl)), td(fin(f.fee) ? usd(f.fee, 2) : "–"));
+    tr.addEventListener("click", () => selectCoin(f.coin));
+    fb.append(tr);
+  }
+  const d24 = agg.fills.filter((f) => f.time >= Date.now() - 864e5);
+  $("fillInfo").textContent = fl.length ? `${d24.length} in 24h · closed ${sUsd(d24.reduce((s, f) => s + (fin(f.pnl) ? f.pnl : 0), 0))}` : "";
+
+  const mb = $("mktBody"); mb.replaceChildren();
+  const rows = Object.values(S.meta).filter((m) => !m.delisted && fin(m.oiUsd)).sort((x, y) => y.oiUsd - x.oiUsd).slice(0, 20);
+  if (!rows.length) mb.append(el("tr", {}, el("td", { colspan: "8", text: "Waiting for market data…", style: "text-align:left;color:var(--muted)" })));
+  for (const m of rows) {
+    const ann = fin(m.funding) ? m.funding * 8760 : NaN, ratio = fin(m.vol) && m.vol > 0 ? m.oiUsd / m.vol : NaN, tr = el("tr", { class: "click" });
+    tr.append(td(m.name), td(px(m.mark)), td(pct(m.chg, 1), cls(m.chg)), td(pct(ann, 1), fin(ann) && Math.abs(ann) > 0.3 ? (ann > 0 ? "neg" : "pos") : ""), td(compact(m.oiUsd)), td(compact(m.vol)), td(fin(ratio) ? ratio.toFixed(2) : "–"), td(pct(m.premium, 3)));
+    tr.addEventListener("click", () => selectCoin(m.name));
+    mb.append(tr);
+  }
+  renderCoinSelect(bot, pv);
+  drawPrice(bot, pv);
+  drawEquity("botEqCv", "botEqEmpty", "botEqInfo", agg.port[cfg.range.bot] ? agg.port[cfg.range.bot].av : [], fin(start) && start > 0 ? start * (1 - lim.floorPct / 100) : NaN, agg.n ? "" : "Add a Hyperliquid account to see this bot's equity.");
+}
+
+function renderAccounts(bot) {
+  const box = $("acctList");
+  if (box.contains(document.activeElement)) return;      // never rebuild under the viewer's cursor
+  box.replaceChildren();
+  const accts = botAccounts(bot);
+  if (!accts.length) box.append(el("div", { class: "acctrow" }, el("div", { class: "note", text: "No accounts yet. Add one per strategy so each strategy's P&L is tracked on its own." })));
+  for (const ac of accts) {
+    const row = el("div", { class: "acctrow" });
+    if (ac.venue === "bybit") {
+      row.append(el("span", { class: "lbl", text: ac.label }), el("span", { class: "meta", text: "Bybit · not connected" }), chip("idle", "pending"), ac.note ? el("div", { class: "note", text: ac.note }) : null);
+    } else {
+      const id = "acct-" + ac.key.replace(/[^a-z0-9]/gi, "-");
+      const input = el("input", { id, value: ac.address || "", placeholder: "0x… public address", spellcheck: "false", "aria-label": ac.label + " address" });
+      const rec = ac.address && S.A[ac.address.toLowerCase()];
+      const state = !ac.address ? chip("idle", "empty") : !ADDR_RE.test(ac.address) ? chip("alert", "invalid") : rec && rec.err ? chip("alert", "error") : rec && rec.last ? chip("ok", "live") : chip("idle", S.mode === "live" ? "loading" : "saved");
+      input.addEventListener("change", () => {
+        const v = input.value.trim();
+        if (v.length > 60) { input.value = ""; $("errBanner").textContent = "That looks like a private key, not an address. Never paste a private key anywhere."; $("errBanner").hidden = false; return; }
+        if (ac.user) { const i = Number(ac.key.split(":u")[1]); cfg.accounts[bot.id][i].address = v; } else cfg.accounts["@" + ac.key] = v;
+        saveCfg(); if (S.mode === "live" && ADDR_RE.test(v)) fetchAcct(v.toLowerCase(), true).then(render); else render();
+      });
+      row.append(el("span", { class: "lbl", text: ac.label }), input, state);
+    }
+    box.append(row);
+  }
+}
+
+/* ---------------- strategy view ---------------- */
+function renderStrat() {
+  const bot = botById(S.view.bot), s = bot.strategies.find((x) => x.id === S.view.strat), head = $("stratHead");
+  head.replaceChildren();
+  head.append(el("div", { class: "tags" }, chip(s.status), el("span", { class: "meta", text: bot.name + " · " + bot.asset })), el("h3", { text: s.name }), el("p", { text: s.summary || "" }));
+  if (s.rules && s.rules.length) head.append(el("div", { class: "lbl2", text: "Rules" }), el("ul", {}, ...s.rules.map((r) => el("li", { text: r }))));
+  const e = s.evidence;
+  if (e) {
+    head.append(el("div", { class: "lbl2", text: "Evidence (excess Sharpe over random entry)" }),
+      el("div", { class: "kv" },
+        el("div", {}, el("div", { class: "k", text: "Fit window" }), el("div", { class: "v", text: fin(e.fit) ? e.fit.toFixed(2) : "–" })),
+        el("div", {}, el("div", { class: "k", text: "Never-seen data" }), el("div", { class: "v", text: fin(e.oos) ? e.oos.toFixed(2) : "–" })),
+        el("div", {}, el("div", { class: "k", text: "Monthly t" }), el("div", { class: "v", text: fin(e.t) ? e.t.toFixed(2) : "–" })),
+        el("div", {}, el("div", { class: "k", text: "Consistency" }), el("div", { class: "v", style: "font-size:14px", text: e.months || "–" }))),
+      e.note ? el("p", { class: "note", text: e.note }) : null);
+  }
+  if (s.gate) head.append(el("div", { class: "lbl2", text: "Gate" }), el("p", { text: s.gate }));
+  if (s.blocker) head.append(el("div", { class: "lbl2", text: "Waiting on" }), el("p", { text: s.blocker }));
+
+  // which account trades this strategy
+  const accts = botAccounts(bot).filter((a) => a.venue !== "bybit");
+  const sel = el("select", { id: "linkSel", "aria-label": "Account that trades this strategy" }, el("option", { value: "", text: "not linked" }), ...accts.map((a) => el("option", { value: a.key, text: a.label + (a.address ? " · " + short(a.address) : "") })));
+  sel.value = (strategyAccount(bot, s) || {}).key || "";
+  sel.addEventListener("change", () => { cfg.links[bot.id + "/" + s.id] = sel.value; saveCfg(); render(); });
+  head.append(el("div", { class: "lbl2", text: "Trades from" }), S.mode === "demo" ? el("p", { class: "note", text: "Example sub-account (demo)." }) : accts.length ? el("div", { class: "form", style: "padding:0;border:0" }, el("label", { for: "linkSel", class: "wide" }, "Hyperliquid account", sel)) : el("p", { class: "note", text: "Add an account on the bot's page, then link it here." }));
+
+  const addr = stratAddr(bot, s), rec = addr ? S.A[addr] : null, show = !!(rec && rec.acct);
+  $("stratStrip").hidden = !show; $("stratEqPanel").hidden = !(rec && Object.keys(rec.port).length); $("stratTables").hidden = !show;
+  if (!show) {
+    if (s.status === "paper" || s.status === "live") head.append(el("p", { class: "note", text: S.mode === "live" ? "No data yet for this strategy's account." : "" }));
+    return;
+  }
+  const pv = positionsView(rec.acct), day = rec.port.day ? lastOf(rec.port.day.pnl) : NaN, upnl = pv.reduce((t, p) => t + (fin(p.upnl) ? p.upnl : 0), 0);
+  const closes = rec.fills.filter((f) => fin(f.pnl) && f.pnl !== 0), wins = closes.filter((f) => f.pnl > 0).length;
+  $("stratStrip").replaceChildren(
+    stat("Equity", usd(rec.acct.av), short(addr)), stat("P&L 24h", sUsd(day), "", cls(day)), stat("Unrealized", sUsd(upnl), "", cls(upnl)),
+    stat("Leverage", rec.acct.av > 0 ? (rec.acct.ntl / rec.acct.av).toFixed(2) + "×" : "–", compact(rec.acct.ntl) + " notional"),
+    stat("Positions", String(pv.length), ""), stat("Win rate", closes.length ? pct(wins / closes.length, 0, false) : "–", closes.length + " closes"));
+  drawEquity("stratEqCv", "stratEqEmpty", "stratEqInfo", rec.port[cfg.range.strat] ? rec.port[cfg.range.strat].av : [], NaN, "");
+  const pb = $("sPosBody"); pb.replaceChildren();
+  if (!pv.length) pb.append(el("tr", {}, el("td", { colspan: "7", text: "Flat.", style: "text-align:left;color:var(--muted)" })));
+  for (const p of pv) pb.append(el("tr", {}, td(p.coin), td(p.size > 0 ? "LONG" : "SHORT", "side " + (p.size > 0 ? "pos" : "neg")), td(compact(Math.abs(p.notional))), td(px(p.entry)), td(px(p.mark)), td(sUsd(p.upnl), cls(p.upnl)), td(fin(p.toLiq) ? pct(p.toLiq, 1, false) : "–")));
+  const fb = $("sFillBody"); fb.replaceChildren();
+  for (const f of rec.fills.slice(0, 30)) fb.append(el("tr", {}, td(hhmm(f.time)), td(f.coin), td(f.dir), td(px(f.px)), td(compact(f.px * f.sz)), td(f.pnl ? sUsd(f.pnl) : "–", cls(f.pnl))));
+  if (!rec.fills.length) fb.append(el("tr", {}, el("td", { colspan: "6", text: "No fills yet.", style: "text-align:left;color:var(--muted)" })));
+}
+
+/* ---------------- bot forms ---------------- */
+function syncBotForms() {
+  const bot = botById(S.view.bot), lim = limitsOf(bot);
+  $("limStart").value = lim.start ?? ""; $("limFloor").value = lim.floorPct; $("limDaily").value = lim.dailyPct; $("limLev").value = lim.maxLev;
+  for (const o of document.querySelectorAll("#ivSeg button")) o.setAttribute("aria-pressed", String(o.dataset.iv === cfg.iv));
+}
+$("limits").addEventListener("input", () => {
+  const bot = botById(S.view.bot), p = (id, d) => { const v = num($(id).value); return fin(v) && v >= 0 ? v : d; }, cur = limitsOf(bot);
+  cfg.limits[bot.id] = { start: $("limStart").value.trim() === "" ? "" : p("limStart", ""), floorPct: p("limFloor", cur.floorPct), dailyPct: p("limDaily", cur.dailyPct), maxLev: p("limLev", cur.maxLev) };
+  saveCfg(); render();
+});
+$("limits").addEventListener("submit", (e) => e.preventDefault());
+for (const b of document.querySelectorAll("[data-preset]")) b.addEventListener("click", () => {
+  const bot = botById(S.view.bot), cur = limitsOf(bot), P = { cashed: [3, 6], hyro: [5, 10], hyroi: [3, 5], own: [3, 20] }[b.dataset.preset];
+  cfg.limits[bot.id] = { ...cur, dailyPct: P[0], floorPct: P[1] }; saveCfg(); syncBotForms(); render();
+});
+$("addAcct").addEventListener("click", () => {
+  const bot = botById(S.view.bot); cfg.accounts[bot.id] = cfg.accounts[bot.id] || [];
+  const n = cfg.accounts[bot.id].length + 1;
+  cfg.accounts[bot.id].push({ label: "Sub-account " + n, address: "" }); saveCfg(); render();
+  const inputs = document.querySelectorAll("#acctList input"); if (inputs.length) inputs[inputs.length - 1].focus();
+});
+for (const b of document.querySelectorAll("#ivSeg button")) b.addEventListener("click", () => { cfg.iv = b.dataset.iv; saveCfg(); syncBotForms(); S.candles = []; fetchCandles().then(render); });
+$("coinSel").addEventListener("change", (e) => selectCoin(e.target.value));
+
+/* ---------------- price chart ---------------- */
+function currentCoin() {
+  if (S.view.kind !== "bot") return "";
+  const bot = botById(S.view.bot), want = cfg.coin[bot.id];
+  if (want && (S.meta[want] || S.mode === "demo")) return want;
+  const pv = positionsView(aggregate(botAddrs(bot), bot).acct);
+  if (pv.length) return pv.slice().sort((x, y) => Math.abs(y.notional) - Math.abs(x.notional))[0].coin;
+  return S.meta.BTC ? "BTC" : Object.keys(S.meta)[0] || "BTC";
+}
+function renderCoinSelect(bot, pv) {
+  const sel = $("coinSel"), cur = currentCoin(), held = pv.map((p) => p.coin);
+  const top = Object.values(S.meta).filter((m) => !m.delisted && fin(m.oiUsd)).sort((a, b) => b.oiUsd - a.oiUsd).slice(0, 30).map((m) => m.name);
+  const names = [...new Set([...held, cur, ...top])], sig = names.join(",") + "|" + cur;
+  if (sel.dataset.sig === sig) return;
+  sel.dataset.sig = sig; sel.replaceChildren(...names.map((n) => el("option", { value: n, text: held.includes(n) ? n + " •" : n }))); sel.value = cur;
+}
+function selectCoin(c) { const bot = botById(S.view.bot); cfg.coin[bot.id] = c; saveCfg(); S.candles = []; fetchCandles().then(render); render(); }
+function tok(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+function setupCanvas(cv) {
+  const r = cv.getBoundingClientRect(), dpr = Math.min(window.devicePixelRatio || 1, 2), w = Math.max(1, Math.round(r.width)), h = Math.max(1, Math.round(r.height));
+  if (cv.width !== w * dpr || cv.height !== h * dpr) { cv.width = w * dpr; cv.height = h * dpr; }
+  const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h); return { g, w, h };
+}
+function niceTicks(lo, hi, n) {
+  const span = hi - lo; if (!(span > 0)) return [lo];
+  const raw = span / n, mag = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / mag, step = (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * mag, out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) out.push(v);
+  return out;
+}
+let hoverIdx = -1;
+function drawPrice(bot, pv) {
+  const cv = $("priceCv"), empty = $("priceEmpty"), coin = currentCoin(), bars = S.candleKey === coin + "|" + cfg.iv ? S.candles : [];
+  if (!cv.getBoundingClientRect().width) return;
+  const { g, w, h } = setupCanvas(cv);
+  if (!bars.length) { empty.hidden = false; empty.textContent = S.err.candles ? "Chart unavailable: " + S.err.candles : "Loading " + coin + "…"; $("ohlc").textContent = ""; return; }
+  empty.hidden = true;
+  const padL = 8, padR = 64, padT = 12, padB = 22, volH = 34, cw = w - padL - padR, ch = h - padT - padB - volH;
+  const posn = pv.find((p) => p.coin === coin);
+  let lo = Math.min(...bars.map((b) => b.l)), hi = Math.max(...bars.map((b) => b.h));
+  if (posn && fin(posn.entry) && posn.entry > lo * 0.9 && posn.entry < hi * 1.1) { lo = Math.min(lo, posn.entry); hi = Math.max(hi, posn.entry); }
+  const pad = (hi - lo) * 0.06 || hi * 0.01; lo -= pad; hi += pad;
+  const y = (v) => padT + (1 - (v - lo) / (hi - lo)) * ch, slot = cw / bars.length, bw = Math.max(1, slot * 0.66), x = (i) => padL + i * slot + slot / 2;
+  const cLine = tok("--line"), cMuted = tok("--muted"), cUp = tok("--up"), cDown = tok("--down"), cAcc = tok("--accent");
+  g.font = "11px " + tok("--mono"); g.textBaseline = "middle";
+  for (const t of niceTicks(lo, hi, 5)) { const yy = Math.round(y(t)) + 0.5; g.strokeStyle = cLine; g.lineWidth = 1; g.beginPath(); g.moveTo(padL, yy); g.lineTo(padL + cw, yy); g.stroke(); g.fillStyle = cMuted; g.textAlign = "left"; g.fillText(px(t), padL + cw + 6, yy); }
+  const vmax = Math.max(...bars.map((b) => (fin(b.v) ? b.v : 0))) || 1;
+  bars.forEach((b, i) => {
+    const col = b.c >= b.o ? cUp : cDown; g.strokeStyle = col; g.fillStyle = col; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(Math.round(x(i)) + 0.5, y(b.h)); g.lineTo(Math.round(x(i)) + 0.5, y(b.l)); g.stroke();
+    const top = y(Math.max(b.o, b.c)), bot2 = y(Math.min(b.o, b.c)); g.fillRect(x(i) - bw / 2, top, bw, Math.max(1, bot2 - top));
+    g.globalAlpha = 0.28; const vh = (fin(b.v) ? b.v : 0) / vmax * (volH - 6); g.fillRect(x(i) - bw / 2, padT + ch + volH - vh, bw, vh); g.globalAlpha = 1;
+  });
+  const hline = (v, color, label) => {
+    if (!fin(v) || v < lo || v > hi) return;
+    const yy = Math.round(y(v)) + 0.5; g.setLineDash([4, 4]); g.strokeStyle = color; g.beginPath(); g.moveTo(padL, yy); g.lineTo(padL + cw, yy); g.stroke(); g.setLineDash([]);
+    const tw = g.measureText(label).width + 10; g.fillStyle = color; g.fillRect(padL + cw - tw - 4, yy - 9, tw, 18); g.fillStyle = tok("--bg"); g.textAlign = "left"; g.fillText(label, padL + cw - tw + 1, yy);
+  };
+  if (posn) { hline(posn.entry, cAcc, "entry " + px(posn.entry)); hline(posn.liq, cDown, "liq " + px(posn.liq)); }
+  const last = bars[bars.length - 1], ly = y(last.c);
+  g.fillStyle = last.c >= last.o ? cUp : cDown; g.fillRect(padL + cw + 1, ly - 9, padR - 2, 18); g.fillStyle = tok("--bg"); g.textAlign = "left"; g.fillText(px(last.c), padL + cw + 6, ly);
+  const t0 = bars[0].t, step = bars.length > 1 ? bars[1].t - bars[0].t : IV_MS[cfg.iv];
+  const fills = aggregate(botAddrs(bot), bot).fills;
+  for (const f of fills) {
+    if (f.coin !== coin || f.time < t0 || f.time > last.t + step) continue;
+    const i = Math.min(bars.length - 1, Math.floor((f.time - t0) / step)), xx = x(i), yy = y(f.px), buy = f.side === "B";
+    g.fillStyle = buy ? cUp : cDown; g.strokeStyle = tok("--panel"); g.lineWidth = 1.5; g.beginPath();
+    if (buy) { g.moveTo(xx, yy + 2); g.lineTo(xx - 5, yy + 10); g.lineTo(xx + 5, yy + 10); } else { g.moveTo(xx, yy - 2); g.lineTo(xx - 5, yy - 10); g.lineTo(xx + 5, yy - 10); }
+    g.closePath(); g.fill(); g.stroke();
+  }
+  g.fillStyle = cMuted; g.textAlign = "center";
+  const every = Math.max(1, Math.ceil(bars.length / Math.max(2, Math.floor(cw / 90))));
+  for (let i = 0; i < bars.length; i += every) { const lab = hhmm(bars[i].t), half = g.measureText(lab).width / 2; if (x(i) - half < padL || x(i) + half > padL + cw) continue; g.fillText(lab, x(i), h - 9); }
+  if (hoverIdx >= 0 && hoverIdx < bars.length) { g.strokeStyle = cMuted; g.globalAlpha = 0.5; g.beginPath(); g.moveTo(Math.round(x(hoverIdx)) + 0.5, padT); g.lineTo(Math.round(x(hoverIdx)) + 0.5, padT + ch + volH); g.stroke(); g.globalAlpha = 1; }
+  const hb = hoverIdx >= 0 && hoverIdx < bars.length ? bars[hoverIdx] : last;
+  $("ohlc").textContent = `${coin} ${cfg.iv} · ${hhmm(hb.t)}  O ${px(hb.o)}  H ${px(hb.h)}  L ${px(hb.l)}  C ${px(hb.c)}  ${pct(hb.o ? hb.c / hb.o - 1 : NaN)}`;
+}
+$("priceCv").addEventListener("mousemove", (e) => {
+  const r = e.currentTarget.getBoundingClientRect(), n = S.candles.length; if (!n || S.view.kind !== "bot") return;
+  const i = Math.floor((e.clientX - r.left - 8) / ((r.width - 72) / n)); hoverIdx = i >= 0 && i < n ? i : -1;
+  const bot = botById(S.view.bot); drawPrice(bot, positionsView(aggregate(botAddrs(bot), bot).acct));
+});
+$("priceCv").addEventListener("mouseleave", () => { hoverIdx = -1; if (S.view.kind === "bot") render(); });
+
+/* ---------------- equity chart ---------------- */
+function drawEquity(cvId, emptyId, infoId, ser, floor, emptyText) {
+  const cv = $(cvId), empty = $(emptyId);
+  if (!cv.getBoundingClientRect().width) return;
+  const { g, w, h } = setupCanvas(cv);
+  if (!ser || ser.length < 2) { empty.hidden = false; empty.textContent = emptyText || (S.mode === "live" ? "Loading equity…" : "Not enough history for this range yet."); $(infoId).textContent = ""; return; }
+  empty.hidden = true;
+  const padL = 8, padR = 70, padT = 14, padB = 20, cw = w - padL - padR, ch = h - padT - padB, t0 = ser[0][0], t1 = ser[ser.length - 1][0];
+  let lo = Math.min(...ser.map((p) => p[1])), hi = Math.max(...ser.map((p) => p[1]));
+  if (fin(floor) && floor > lo - (hi - lo) * 1.5) lo = Math.min(lo, floor);
+  const pp = (hi - lo) * 0.1 || hi * 0.01; lo -= pp; hi += pp;
+  const X = (t) => padL + (t1 > t0 ? (t - t0) / (t1 - t0) : 0) * cw, Y = (v) => padT + (1 - (v - lo) / (hi - lo)) * ch;
+  const first = ser[0][1], lastV = ser[ser.length - 1][1], col = lastV >= first ? tok("--up") : tok("--down"), cMuted = tok("--muted");
+  g.font = "11px " + tok("--mono"); g.textBaseline = "middle";
+  for (const t of niceTicks(lo, hi, 3)) { const yy = Math.round(Y(t)) + 0.5; g.strokeStyle = tok("--line"); g.beginPath(); g.moveTo(padL, yy); g.lineTo(padL + cw, yy); g.stroke(); g.fillStyle = cMuted; g.textAlign = "left"; g.fillText(usd(t, 0), padL + cw + 6, yy); }
+  if (fin(floor) && floor >= lo && floor <= hi) { const yy = Math.round(Y(floor)) + 0.5; g.setLineDash([4, 4]); g.strokeStyle = tok("--down"); g.beginPath(); g.moveTo(padL, yy); g.lineTo(padL + cw, yy); g.stroke(); g.setLineDash([]); g.fillStyle = tok("--down"); g.textAlign = "left"; g.fillText("floor", padL + 4, yy - 8); }
+  const grad = g.createLinearGradient(0, padT, 0, padT + ch);
+  try { grad.addColorStop(0, col + "44"); grad.addColorStop(1, col + "00"); } catch (_) { grad.addColorStop(0, "rgba(0,0,0,0)"); grad.addColorStop(1, "rgba(0,0,0,0)"); }
+  g.beginPath(); ser.forEach(([t, v], i) => (i ? g.lineTo(X(t), Y(v)) : g.moveTo(X(t), Y(v)))); g.lineTo(X(t1), padT + ch); g.lineTo(X(t0), padT + ch); g.closePath(); g.fillStyle = grad; g.fill();
+  g.beginPath(); ser.forEach(([t, v], i) => (i ? g.lineTo(X(t), Y(v)) : g.moveTo(X(t), Y(v)))); g.strokeStyle = col; g.lineWidth = 1.8; g.stroke();
+  g.fillStyle = col; g.beginPath(); g.arc(X(t1), Y(lastV), 3.5, 0, Math.PI * 2); g.fill();
+  g.fillStyle = cMuted; g.textAlign = "left"; g.fillText(new Date(t0).toLocaleDateString([], { month: "short", day: "numeric" }), padL, h - 8); g.textAlign = "right"; g.fillText("now", padL + cw, h - 8);
+  $(infoId).textContent = `${usd(first)} → ${usd(lastV)}  ${pct(first > 0 ? lastV / first - 1 : NaN)}`;
+}
+
+/* ---------------- render dispatch ---------------- */
+function render() {
+  if (!FUND) return;                      // registry not loaded yet (resize/timer fired during boot)
+  renderFeed(); renderCrumbs(); rangeButtons();
+  if (S.view.kind === "fund") renderFund(); else if (S.view.kind === "bot") renderBot(); else renderStrat();
+}
+
+/* ---------------- global controls ---------------- */
+$("modeBtn").addEventListener("click", () => {
+  if (S.mode === "demo") {
+    if (!allLiveAddrs().length) { $("errBanner").textContent = "No Hyperliquid addresses yet. Open a bot, add its accounts, then press Use my accounts."; $("errBanner").hidden = false; return; }
+    startLive();
+  } else startDemo();
+});
+function applyTheme() { if (cfg.theme) document.documentElement.dataset.theme = cfg.theme; else delete document.documentElement.dataset.theme; }
+$("themeBtn").addEventListener("click", () => {
+  const dark = cfg.theme ? cfg.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  cfg.theme = dark ? "light" : "dark"; saveCfg(); applyTheme(); render();
+});
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => render());
+let resizeRaf = 0;
+new ResizeObserver(() => { cancelAnimationFrame(resizeRaf); resizeRaf = requestAnimationFrame(() => render()); }).observe(document.body);
+setInterval(() => { if (!document.hidden) renderFeed(); }, 5000);
+
+/* ---------------- boot ---------------- */
+(async () => {
+  applyTheme();
+  try { FUND = await loadRegistry(); }
+  catch (e) { $("errBanner").textContent = "The fund registry could not be read: " + e.message; $("errBanner").hidden = false; return; }
+  $("fundName").textContent = FUND.fund || "Night Desk";
+  await detectRelay();
+  if (cfg.live && allLiveAddrs().length) startLive(); else startDemo();
+  route();
+})();
+</script>
+</body>
+</html>
