@@ -191,6 +191,10 @@
     {
       "name": "Level revisit + break of structure (Monday / last-week high-low)",
       "why": "45,877 trades, 4 pre-registered cells: \u22120.02 to \u22120.05R per trade. About +0.03R better than random timing, too thin to beat fees. Multi-timeframe version (4h structure, 1h/15m entry): 1h entry broke even (+0.015R, t 0.45); 15m entry \u22120.10R after fees."
+    },
+    {
+      "name": "HTF Sweep CISD (WillyAlgoTrader), default settings",
+      "why": "Ported and run on 25\u201330 coins: 30m\u21921D \u22120.074R, 1h\u21921D \u22120.057R per trade after fees across 4,844 trades; identical to random entries. The TradingView panel's profit was zero fees and optimistic fills."
     }
   ]
 }
