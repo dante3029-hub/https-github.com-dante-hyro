@@ -34,6 +34,7 @@ import bnf_stocks as BS
 THRESH = 0.10
 POS_FRAC = 0.10
 MAX_POS = 10
+PEAK_OPEN = 0          # diagnostics: most positions ever open at once
 CRYPTO_URL = ("https://raw.githubusercontent.com/dante3029-hub/https-github.com-dante-hyro/"
               "research/nov-2026/results/crypto_sleeves_daily.csv")
 
@@ -62,6 +63,8 @@ def bnf_book(data):
                 taken += 1
             else:
                 skipped += 1
+        global PEAK_OPEN
+        PEAK_OPEN = max(PEAK_OPEN, len(open_pos))
         r = 0.0
         keep = []
         for p in open_pos:
