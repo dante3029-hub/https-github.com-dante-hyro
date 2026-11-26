@@ -23,27 +23,6 @@
       ],
       "strategies": [
         {
-          "id": "sr-break",
-          "name": "S/R break",
-          "status": "paper",
-          "summary": "Goes long when price breaks a volume-defined resistance level on 6-hour bars while open interest is rising.",
-          "rules": [
-            "6-hour bars, 24 liquid coins",
-            "Enter long when the whole candle clears resistance and OI is expanding",
-            "Stop 3 ATR below entry, exit after 15 bars, no take-profit",
-            "Equal risk with OI rank"
-          ],
-          "evidence": {
-            "fit": 1.56,
-            "oos": 1.58,
-            "t": 1.97,
-            "months": "9 of 11 months up",
-            "note": "Excess Sharpe over random-timing trades. Out-of-sample = 2023, never used to fit. Measured after fixing the stop-bar lookahead (as-built 2.09, fixed 1.42 absolute)."
-          },
-          "gate": "Passed: kept its edge on 2023 data it was never fitted to.",
-          "longOnly": true
-        },
-        {
           "id": "oi-rank",
           "name": "OI rank",
           "status": "paper",
@@ -140,6 +119,10 @@
     }
   ],
   "retired": [
+    {
+      "name": "S/R break 6h (OI-expanding filter)",
+      "why": "Lookahead: the OI filter read OI at the END of the entry candle, 6h after entry. Fixed, 2023 excess over random is \u22120.14 (was +1.58); only the in-sample period stays positive."
+    },
     {
       "name": "FVG 12h sleeve",
       "why": "Sharpe 2.99 fell to 0.26 once the stop-bar lookahead was fixed."
